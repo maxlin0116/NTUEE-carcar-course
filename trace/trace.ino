@@ -15,7 +15,7 @@ int MotorR_PWMR = 11;
 
 //define the used variable                       
 int l2, l3, m, r2, r3;                      // the sensor value form the IR sensor from the left to the right
-int vL, vR;                                 // the power given to the left and right motor
+double vL, vR;                              // the power given to the left and right motor
 int w2 = 5;                                 // the weighted value of L2 and R2 IR sensor
 int w3 = 25;                                // the weighted value of L3 and R3 IR sensor 
 double error;                               // the value that tells how left or right the car relative to the black line
@@ -23,9 +23,11 @@ int powerCorrection;                        // the value to modify the power of 
 double Kp = 1;                              // proportion constant between error and powerCorrection
 int Tp = 150;                               // the base power given to the left and right motor
 int operation[10] = {1,3,1,3,1,3,1,3,1,3};  // the list to store the move of the operation
+//int operation[6] = {3,3,3,3,3,3};
 int current_order = 0;                      // the current operating operation index
-int turn_time = 800;                        // the main turn-time
+int turn_time = 700;                        // the main turn-time
 int turn_modify_time = 200;                 // the addition time to turn if the main turn is not enough 
+int IR_critical_value = 150;                // the IR sensor critical value
 
 //set up the pin mode
 void setup() {
@@ -81,14 +83,14 @@ void sensor() {
 
 void turn_right()
 {
-  MotorWriting(vL, 0);
+  MotorWriting(Tp, 0);
   delay(turn_time);
   sensor();
   
   // If turn not enough
-  if(l2 < 150 && m < 150 && r2 < 150)
+  if(l2 < IR_critical_value && m < IR_critical_value && r2 < IR_critical_value)
   {
-    MotorWriting(vL, 0);
+    MotorWriting(Tp, 0);
     delay(turn_modify_time);
   }
 }
@@ -100,7 +102,7 @@ void turn_left()
   sensor();
 
   // If turn not enough
-  if(l2 < 150 && m < 150 && r2 < 150)
+  if(l2 < IR_critical_value && m < IR_critical_value && r2 < IR_critical_value)
   {
     MotorWriting(0, Tp);
     delay(turn_modify_time);
@@ -109,12 +111,12 @@ void turn_left()
 
 void U_turn()
 {
-  MotorWriting(Tp, -Tp);
+  MotorWriting(Tp+20, -Tp-20);
   delay(turn_time);
   sensor();
 
   // If turn not enough
-  if(l2 < 150 && m < 150 && r2 < 150)
+  if(l2 < IR_critical_value && m < IR_critical_value && r2 < IR_critical_value)
   {
     MotorWriting(Tp, -Tp);
     delay(turn_modify_time);
@@ -131,9 +133,9 @@ void action(int order)
 void Tracking() {
   sensor();
 
-  if (l2 > 150 && m > 150 && r2 > 150)  // detect the black block
+  if (l2 > IR_critical_value && m > IR_critical_value && r2 > IR_critical_value)  // detect the black block
   {
-    while(l2 > 150 && m > 150 && r2 > 150)
+    while(l2 > IR_critical_value && m > IR_critical_value && r2 > IR_critical_value)
     {
       MotorWriting(Tp, Tp);
       sensor();
