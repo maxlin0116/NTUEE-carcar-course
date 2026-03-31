@@ -30,7 +30,7 @@ int MotorR_I4 = 7;
 int MotorR_PWMR = 11;
 
 
-//define the used variable                       
+//define the used variable            `           
 int l2, l3, m, r2, r3;                      // the sensor value form the IR sensor or from the left to the right
 double vL, vR;                              // the power given to the left and right motor
 int w2 = 5;                                 // the weighted value of L2 and R2 IR sensor
@@ -253,7 +253,7 @@ void Tracking() {
     error = (l3*(-w3) + l2*(-w2) + r2*w2 + r3*w3)/(l3 + l2 + m + w2 + w3);
     powerCorrection = Kp * error;
     vR = Tp - powerCorrection;
-    vL = Tp + 7*powerCorrection;
+    vL = Tp + 5*powerCorrection;
     if(vR>255) vR = 255;
     if(vL>255) vL = 255;
     if(vR<-255) vR = -255;
