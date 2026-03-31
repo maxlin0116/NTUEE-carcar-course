@@ -38,7 +38,6 @@ int Tp = 200;                               // the base power given to the left 
 int operation[10] = {1,3,4,3,1,3,1,3,1,3};  // the list to store the move of the operation
 //int operation[6] = {3,3,3,3,3,3};
 int current_order = 0;                      // the current operating operation index
-int turn_delay_time = 150;
 int turn_time = 500;                        // the main turn-time
 int turn_modify_time = 200;                 // the addition time to turn if the main turn is not enough 
 int IR_critical_value = 150;                // the IR sensor critical value
@@ -162,7 +161,6 @@ void sensor() {
 
 void turn_right()
 {
-  delay(turn_delay_time);
   MotorWriting(Tp, 0);
   delay(turn_time);
   sensor();
@@ -177,7 +175,6 @@ void turn_right()
 
 void turn_left()
 {
-  delay(turn_delay_time);
   MotorWriting(0, Tp);
   delay(turn_time);
   sensor();
@@ -194,7 +191,7 @@ void U_turn()
 {
   UIDRead();
   MotorWriting(Tp+30, -Tp-30);
-  delay(turn_time+100);
+  delay(turn_time);
   sensor();
 
   // If turn not enough
