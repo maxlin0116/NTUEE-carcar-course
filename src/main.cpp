@@ -1,3 +1,5 @@
+#include <Arduino.h>
+
 //bluetooth setup
 #include <SPI.h>
 #include <MFRC522.h>
@@ -7,6 +9,10 @@ MFRC522 *mfrc522;
 #define CUSTOM_NAME "HM10_G6" 
 long baudRates[] = {9600, 19200, 38400, 57600, 115200, 4800, 2400, 1200, 230400};
 bool moduleReady = false;
+
+bool waitForResponse(const char* expected, unsigned long timeout);
+void sendATCommand(const char* command);
+void UIDRead();
 
 //defining pin for IR sensor
 #define L3 A7
@@ -25,7 +31,7 @@ int MotorR_PWMR = 11;
 
 
 //define the used variable                       
-int l2, l3, m, r2, r3;                      // the sensor value form the IR sensor from the left to the right
+int l2, l3, m, r2, r3;                      // the sensor value form the IR sensor or from the left to the right
 double vL, vR;                              // the power given to the left and right motor
 int w2 = 5;                                 // the weighted value of L2 and R2 IR sensor
 int w3 = 25;                                // the weighted value of L3 and R3 IR sensor 
@@ -230,7 +236,8 @@ void action(int order)
 void Tracking() {
   sensor();
 
-  if (l2 > IR_critical_value && m > IR_critical_value && r2 > IR_critical_value)  // detect the black block
+  if (l2 > IR_critical_value && m > IR_critical_value && r2 > IR_critical_value)
+  // detect the black block
   {
     while(l2 > IR_critical_value && m > IR_critical_value && r2 > IR_critical_value)
     {
@@ -341,7 +348,6 @@ void sendATCommand(const char* command) {
  * Helper to check response for specific substrings
  */
 bool waitForResponse(const char* expected, unsigned long timeout) {
-  unsigned long start = millis();
   Serial3.setTimeout(timeout);
   String response = Serial3.readString();
   if (response.length() > 0) {
