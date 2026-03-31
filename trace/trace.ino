@@ -253,18 +253,29 @@ void Tracking() {
   }
 }
 
-void UIDRead(){
-  if(!mfrc522->PICC_IsNewCardPresent()) {
-  goto FuncEnd;
-  } //PICC_IsNewCardPresent()：是否感應到新的卡片?
-  if(!mfrc522->PICC_ReadCardSerial()) {
-  goto FuncEnd;
-  } //PICC_ReadCardSerial()：是否成功讀取資料?
-  Serial.println(F("**Card Detected:**"));
-  mfrc522->PICC_DumpDetailsToSerial(&(mfrc522->uid)); //讀出 UID
-  mfrc522->PICC_HaltA(); // 讓同一張卡片進入停止模式 (只顯示一次)
-  mfrc522->PCD_StopCrypto1(); // 停止 Crypto1
-  FuncEnd:; // goto 跳到這.
+void UIDRead() {
+  if (!mfrc522->PICC_IsNewCardPresent()) return;
+  if (!mfrc522->PICC_ReadCardSerial()) return;
+
+  String uid = "";
+
+  for (byte i = 0; i < mfrc522->uid.size; i++) {
+    if (mfrc522->uid.uidByte[i] < 0x10) uid += "0";
+    uid += String(mfrc522->uid.uidByte[i], HEX);
+  }
+
+  uid.toUpperCase();
+
+  // 傳到 USB 連線的電腦
+  Serial.print("UID:");
+  Serial.println(uid);
+
+  // 傳到藍牙(HM-10)連到電腦 / Python
+  Serial3.print("UID:");
+  Serial3.println(uid);
+
+  mfrc522->PICC_HaltA();
+  mfrc522->PCD_StopCrypto1();
 }
 
 void looping() {
@@ -293,6 +304,7 @@ void looping() {
 
 void loop(){
   //Tracking();
+  UIDRead();
   looping();
   // --------- below are the test code ---------
   // MotorWriting(150, 150);
