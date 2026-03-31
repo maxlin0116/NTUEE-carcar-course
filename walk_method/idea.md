@@ -1,0 +1,1 @@
+## Idea for Walk Method
