@@ -193,7 +193,6 @@ void turn_left()
 
 void U_turn()
 {
-  UIDRead();
   MotorWriting(Tp+30, -Tp-30);
   delay(turn_time);
   sensor();
