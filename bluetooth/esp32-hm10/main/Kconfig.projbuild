@@ -1,0 +1,22 @@
+menu "HM-10 BLE Bridge Configuration"
+
+    config HM10_DEVICE_NAME
+        string "Target HM-10 Device Name"
+        default "HMSoft"
+        help
+            The name of the HM-10 device to connect to.
+            Common names: HMSoft, sallen_hm10
+
+            You can find the device name using a BLE scanner app.
+
+    config HM10_DEVICE_MAC
+        string "Target HM-10 Device MAC Address (optional)"
+        default ""
+        help
+            Optional: Connect by MAC address instead of name.
+            Format: AA:BB:CC:DD:EE:FF
+
+            Leave empty to search by name only.
+            If specified, this takes priority over device name.
+
+endmenu
