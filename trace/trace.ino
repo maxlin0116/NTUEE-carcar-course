@@ -1,21 +1,19 @@
+//bluetooth setup
+#include <SPI.h>
+#include <MFRC522.h>
+#define RST_PIN 3
+#define SS_PIN 2
+MFRC522 *mfrc522;
+#define CUSTOM_NAME "HM10_G6" 
+long baudRates[] = {9600, 19200, 38400, 57600, 115200, 4800, 2400, 1200, 230400};
+bool moduleReady = false;
+
 //defining pin for IR sensor
 #define L3 A7
 #define L2 A6
 #define M A5
 #define R2 A4
 #define R3 A3
-
-#include <SPI.h>
-#include <MFRC522.h>
-// 引入 SPI 程式庫 與 MFRC522 程式庫
-#define RST_PIN 3
-#define SS_PIN 2
-// 設定重設腳位 與 SPI 介面裝置選擇腳位
-MFRC522 *mfrc522;
-// 宣告MFRC522指標
-#define CUSTOM_NAME "HM10_G6" // Max length is 12 characters [1]
-long baudRates[] = {9600, 19200, 38400, 57600, 115200, 4800, 2400, 1200, 230400};
-bool moduleReady = false;
 
 //define the pin_name for motor
 int MotorL_PWML = 10;
@@ -43,10 +41,10 @@ int turn_modify_time = 200;                 // the addition time to turn if the 
 int IR_critical_value = 150;                // the IR sensor critical value
 
 
-//set up the pin mode
+//set up the pin mode and remote connection with HM-10
 void setup() {
-  Serial3.begin(9600);
-  Serial.begin(115200); // Debug Monitor (USB)
+  Serial3.begin(9600);  // to HM-10 (Bluetooth Module)
+  Serial.begin(115200); // to USB (Serial Monitor)
   while (!Serial);
   Serial.println("Initializing HM-10...");
 
@@ -205,17 +203,24 @@ void U_turn()
 void no_turn()
 {
   MotorWriting(Tp, Tp);
-  delay(200);
+  delay(turn_time);
   sensor();
   if (l2 > IR_critical_value && m > IR_critical_value && r2 > IR_critical_value)
   {
     MotorWriting(Tp, Tp);
-    delay(100);
+    delay(turn_modify_time);
   }
+}
+
+void stop()
+{
+  MotorWriting(0, 0);
+  delay(turn_time);
 }
 
 void action(int order)
 {
+  if(operation[order] == 0) stop();
   if(operation[order] == 1) turn_right();
   if(operation[order] == 2) turn_left();
   if(operation[order] == 3) U_turn();
@@ -263,11 +268,11 @@ void UIDRead() {
 
   uid.toUpperCase();
 
-  // 傳到 USB 連線的電腦
+  // to USB (Serial Monitor)
   Serial.print("UID:");
   Serial.println(uid);
 
-  // 傳到藍牙(HM-10)連到電腦 / Python
+  // to HM-10 (Bluetooth Module)
   Serial3.print("UID:");
   Serial3.println(uid);
 
@@ -275,16 +280,17 @@ void UIDRead() {
   mfrc522->PCD_StopCrypto1();
 }
 
-void looping() {
+void remote_control() {
   if (Serial3.available()) {
     char c = Serial3.read();
     Serial.print("BT received: ");
     Serial.println(c);
 
-    if (c == '1') turn_right();
+    if (c == '0') stop();
+    else if (c == '1') turn_right();
     else if (c == '2') turn_left();
     else if (c == '3') U_turn();
-    else if (c == '0') MotorWriting(0, 0);
+    else if (c == '4') no_turn();
   }
 
   if (Serial.available()) {
@@ -292,17 +298,19 @@ void looping() {
     Serial.print("USB received: ");
     Serial.println(c);
 
-    if (c == '1') turn_right();
+    if (c == '0') stop();
+    else if (c == '1') turn_right();
     else if (c == '2') turn_left();
     else if (c == '3') U_turn();
-    else if (c == '0') MotorWriting(0, 0);
+    else if (c == '4') no_turn();
   }
 }
 
 void loop(){
   //Tracking();
   UIDRead();
-  looping();
+  remote_control();
+  
   // --------- below are the test code ---------
   // MotorWriting(150, 150);
   // Serial.println("error");
