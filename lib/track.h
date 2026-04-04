@@ -1,4 +1,7 @@
 /***************************************************************************/
+#pragma once
+
+/***************************************************************************/
 // File			  [track.h]
 // Author		  [Erik Kuo]
 // Synopsis		[Code used for tracking]
@@ -11,11 +14,11 @@
 /*feel free to add your own function for convenience*/
 
 /*===========================import variable===========================*/
-int extern _Tp;
+extern int _Tp;
 /*===========================import variable===========================*/
 
 // Write the voltage to motor.
-void MotorWriting(double vL, double vR) {
+inline void MotorWriting(double vL, double vR) {
     if (vL >= 0) {
         digitalWrite(MotorL_I3, LOW);
         digitalWrite(MotorL_I4, HIGH);
@@ -39,7 +42,7 @@ void MotorWriting(double vL, double vR) {
 }  // MotorWriting
 
 // P/PID control Tracking
-void tracking(int l2, int l1, int m0, int r1, int r2) {
+inline void tracking(int l2, int l1, int m0, int r1, int r2) {
     const double _w1 = 5.0;
     const double _w2 = 25.0;
     const double _Kp = 1.0;  // p term parameter

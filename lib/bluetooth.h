@@ -101,3 +101,18 @@ void send_byte(byte* id, byte& idSize) {
     Serial.println();
 #endif
 }  // send_byte
+
+bool waitForResponse(const char* expected, unsigned long timeout) {
+    Serial3.setTimeout(timeout);
+    String response = Serial3.readString();
+    if (response.length() > 0) {
+        Serial.print("HM10 Response: ");
+        Serial.println(response);
+    }
+    return response.indexOf(expected) != -1;
+}
+
+void sendATCommand(const char* command) {
+    Serial3.print(command);
+    waitForResponse("", 1000);
+}

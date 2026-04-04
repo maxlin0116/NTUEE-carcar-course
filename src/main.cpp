@@ -1,26 +1,19 @@
 #include <Arduino.h>
 
-/***************************************************************************/
-// File       [final_project.ino]
-// Author     [Erik Kuo]
-// Synopsis   [Code for managing main process]
-// Functions  [setup, loop, Search_Mode, Hault_Mode, SetState]
-// Modify     [2020/03/27 Erik Kuo]
-/***************************************************************************/
-
 #define DEBUG
 
 // for RFID
 #include <MFRC522.h>
 #include <SPI.h>
 
+#include "../lib/RFID.h"		// RFID reading functions
+#include "../lib/bluetooth.h"	// Bluetooth communication functions
+#include "../lib/node.h"		// Node command definitions and queue management
+#include "../lib/track.h"		// IR sensor reading and line tracking functions
+#include "../lib/control.h"		// Motor control functions
+
 /*===========================define pin & create module object================================*/
-// BlueTooth
-// BT connect to Serial1 (Hardware Serial)
-// Mega               HC05
-// Pin  (Function)    Pin
-// 18    TX       ->  RX
-// 19    RX       <-  TX
+// Motor pins
 #define MotorR_I1 6
 #define MotorR_I2 7
 #define MotorR_PWMR 11
@@ -28,34 +21,42 @@
 #define MotorL_I4 9
 #define MotorL_PWML 10
 
+// IR sensor pins
 #define IRpin_LL A7
 #define IRpin_L A6
 #define IRpin_M A5
 #define IRpin_R A4
 #define IRpin_RR A3
 
+// RFID pins
 #define RST_PIN 3
 #define SS_PIN 2
 MFRC522 mfrc522(SS_PIN, RST_PIN);
 
+// Bluetooth pins
 #define CUSTOM_NAME "HM10_G6"
 long baudRates[] = {9600, 19200, 38400, 57600, 115200, 4800, 2400, 1200, 230400};
 bool moduleReady = false;
 
-/*===========================define pin & create module object===========================*/
-
+// Node command queue
 bool waitForResponse(const char* expected, unsigned long timeout);
 void sendATCommand(const char* command);
 void UIDRead();
 
-/*============setup============*/
-void setup() {
-    Serial3.begin(9600);
-    Serial.begin(115200);
-    while (!Serial) {}
+// Motor control function prototype
+void MotorWriting(double vL, double vR);
 
+/*===========================setup================================*/
+void setup() {
+    Serial3.begin(9600);									// Start with a common baud rate for HM-10
+	Serial3.setTimeout(100);								// Set a short timeout for AT command responses
+    Serial.begin(115200);									// Start serial for debugging
+    while (!Serial) {}										// Wait for serial to be ready
+
+	// Initialize Bluetooth module
     Serial.println("Initializing HM-10...");
 
+	// Try different baud rates to find the HM-10
     for (int i = 0; i < 9; i++) {
         Serial.print("Testing baud rate: ");
         Serial.println(baudRates[i]);
@@ -75,33 +76,41 @@ void setup() {
         }
     }
 
+	// If we couldn't detect the module, print an error message
     if (!moduleReady) {
         Serial.println("Failed to detect HM-10. Check 3.3V VCC and wiring.");
         return;
     }
 
+	// Configure HM-10 settings
     Serial.println("Restoring factory defaults...");
     sendATCommand("AT+RENEW");
     delay(500);
 
+	// Set the device name
     Serial.print("Setting name to: ");
     Serial.println(CUSTOM_NAME);
     String nameCmd = "AT+NAME" + String(CUSTOM_NAME);
     sendATCommand(nameCmd.c_str());
 
+	// Enable notifications for the HM-10
     Serial.println("Enabling notifications...");
     sendATCommand("AT+NOTI1");
 
+	// Query the Bluetooth address for reference
     Serial.println("Querying Bluetooth Address");
     sendATCommand("AT+ADDR?");
 
+	// Reset the module to apply settings
     Serial.println("Restarting module...");
     sendATCommand("AT+RESET");
     delay(1000);
     Serial3.begin(9600);
 
+	// Final confirmation
     Serial.println("Initialization Complete.");
 
+	// Set motor control pins as outputs
     pinMode(MotorR_I1, OUTPUT);
     pinMode(MotorR_I2, OUTPUT);
     pinMode(MotorL_I3, OUTPUT);
@@ -109,48 +118,33 @@ void setup() {
     pinMode(MotorL_PWML, OUTPUT);
     pinMode(MotorR_PWMR, OUTPUT);
 
+	// Set IR sensor pins as inputs
     pinMode(IRpin_LL, INPUT);
     pinMode(IRpin_L, INPUT);
     pinMode(IRpin_M, INPUT);
     pinMode(IRpin_R, INPUT);
     pinMode(IRpin_RR, INPUT);
 
+	// Initialize SPI and RFID reader
     SPI.begin();
     mfrc522.PCD_Init();
     Serial.println(F("Read UID on a MIFARE PICC:"));
-#ifdef DEBUG
-    Serial.println("Start!");
-#endif
+
+	// Final debug message
+	#ifdef DEBUG
+		Serial.println("Start!");
+	#endif
 }
-/*============setup============*/
-
-void MotorWriting(double vL, double vR);
-
-/*=====Import header files=====*/
-#include "../lib/RFID.h"
-#include "../lib/bluetooth.h"
-#include "../lib/node.h"
-#include "../lib/track.h"
-/*=====Import header files=====*/
 
 /*===========================initialize variables===========================*/
-int l2 = 0, l1 = 0, m0 = 0, r1 = 0, r2 = 0;
-int _Tp = 200;
-constexpr int IR_critical_value = 150;
-bool state = false;
-BT_CMD _cmd = NOTHING;
-char queued_node_cmd = 0;
-/*===========================initialize variables===========================*/
+int l2 = 0, l1 = 0, m0 = 0, r1 = 0, r2 = 0;	// IR sensor readings	
+int _Tp = 200;								// Base motor power
+constexpr int IR_critical_value = 150;		// Threshold for determining if the sensor is over a line (black) or not (white)
+bool state = false;							// State of the car: false = halt, true = active
+BT_CMD _cmd = NOTHING;						// Enum for Bluetooth commands, defined in bluetooth.h
+char queued_node_cmd = 0;					// Queue for node commands received via Bluetooth when at a node
 
-/*===========================declare function prototypes===========================*/
-void Search();
-void SetState();
-bool IsRunCommand(char cmd);
-bool IsHaltCommand(char cmd);
-bool HandleMotorTestCommand(char cmd);
-/*===========================declare function prototypes===========================*/
-
-/*===========================define function===========================*/
+/*===========================main function===========================*/
 void loop() {
     UIDRead();
     SetState();
@@ -162,271 +156,7 @@ void loop() {
     }
 }
 
-void SetState() {
-    while (Serial3.available()) {
-        const char cmd = Serial3.read();
-#ifdef DEBUG
-        Serial.print("BT state cmd: ");
-        if (cmd == '\r') {
-            Serial.println("\\r");
-        } else if (cmd == '\n') {
-            Serial.println("\\n");
-        } else {
-            Serial.println(cmd);
-        }
-#endif
-        if (IsRunCommand(cmd)) {
-            state = true;
-#ifdef DEBUG
-            Serial.print("State -> RUN via ");
-            Serial.println(cmd);
-#endif
-        } else if (IsHaltCommand(cmd)) {
-            state = false;
-#ifdef DEBUG
-            Serial.print("State -> HALT via ");
-            Serial.println(cmd);
-#endif
-        } else {
-            if (!HandleMotorTestCommand(cmd)) {
-                queued_node_cmd = cmd;
-#ifdef DEBUG
-                Serial.print("Queued node cmd: ");
-                Serial.println(cmd);
-#endif
-            }
-        }
-    }
-}
-
-void Search() {
-    static char pending_cmd = 0;
-    static bool waiting_at_node = false;
-    const int raw_l2 = analogRead(IRpin_LL);
-    const int raw_l1 = analogRead(IRpin_L);
-    const int raw_m0 = analogRead(IRpin_M);
-    const int raw_r1 = analogRead(IRpin_R);
-    const int raw_r2 = analogRead(IRpin_RR);
-
-    l2 = raw_l2;
-    l1 = raw_l1;
-    m0 = raw_m0;
-    r1 = raw_r1;
-    r2 = raw_r2;
-
-    if (queued_node_cmd) {
-        pending_cmd = queued_node_cmd;
-        queued_node_cmd = 0;
-#ifdef DEBUG
-        Serial.print("Search cmd: ");
-        Serial.println(pending_cmd);
-#endif
-    }
-
-    const bool at_node = node_is_active();
-#ifdef DEBUG
-    Serial.print("RAW ");
-    Serial.print(raw_l2);
-    Serial.print(" ");
-    Serial.print(raw_l1);
-    Serial.print(" ");
-    Serial.print(raw_m0);
-    Serial.print(" ");
-    Serial.print(raw_r1);
-    Serial.print(" ");
-    Serial.println(raw_r2);
-    Serial.print("IR ");
-    Serial.print(l2);
-    Serial.print(" ");
-    Serial.print(l1);
-    Serial.print(" ");
-    Serial.print(m0);
-    Serial.print(" ");
-    Serial.print(r1);
-    Serial.print(" ");
-    Serial.print(r2);
-    Serial.print(" | at_node=");
-    Serial.println(at_node);
-#endif
-
-    if (waiting_at_node) {
-        MotorWriting(0, 0);
-        if (!pending_cmd) {
-#ifdef DEBUG
-            Serial.println("Waiting at node");
-#endif
-            return;
-        }
-
-        while (node_is_active()) {
-            MotorWriting(_Tp, _Tp);
-        }
-        MotorWriting(0, 0);
-        delay(60);
-        waiting_at_node = false;
-
-        switch (pending_cmd) {
-            case 'L':
-            case 'l':
-            case '2':
-                node_left_turn();
-                break;
-            case 'R':
-            case 'r':
-            case '1':
-                node_right_turn();
-                break;
-            case 'B':
-            case 'b':
-            case 'U':
-            case 'u':
-            case '3':
-                node_u_turn();
-                break;
-            case 'S':
-            case 's':
-            case '0':
-                node_stop();
-                break;
-            case 'F':
-            case 'f':
-            case '4':
-            default:
-                node_forward();
-                break;
-        }
-
-        pending_cmd = 0;
-        return;
-    }
-
-    if (!at_node) {
-        tracking(l2, l1, m0, r1, r2);
-        return;
-    }
-
-    MotorWriting(0, 0);
-
-    if (!pending_cmd) {
-        waiting_at_node = true;
-        MotorWriting(0, 0);
-        return;
-    }
-
-    switch (pending_cmd) {
-        case 'L':
-        case 'l':
-        case '2':
-            node_left_turn();
-            break;
-        case 'R':
-        case 'r':
-        case '1':
-            node_right_turn();
-            break;
-        case 'B':
-        case 'b':
-        case '3':
-            node_u_turn();
-            break;
-        case 'S':
-        case 's':
-        case '0':
-            node_stop();
-            break;
-        case 'F':
-        case 'f':
-        case '4':
-        default:
-            node_forward();
-            break;
-    }
-
-    pending_cmd = 0;
-}
-
-bool IsRunCommand(char cmd) {
-    return cmd == 'G' || cmd == 'g' || cmd == 'A' || cmd == 'a' || cmd == 'T' || cmd == 't';
-}
-
-bool IsHaltCommand(char cmd) {
-    return cmd == 'H' || cmd == 'h' || cmd == 'P' || cmd == 'p' || cmd == 'X' || cmd == 'x';
-}
-
-bool HandleMotorTestCommand(char cmd) {
-    switch (cmd) {
-        case '5':
-            Serial.println("TEST: MotorWriting(_Tp, _Tp)");
-            MotorWriting(_Tp, _Tp);
-            delay(500);
-            MotorWriting(0, 0);
-            return true;
-        case '6':
-            Serial.println("TEST: MotorWriting(_Tp, 0)");
-            MotorWriting(_Tp, 0);
-            delay(500);
-            MotorWriting(0, 0);
-            return true;
-        case '7':
-            Serial.println("TEST: MotorWriting(0, _Tp)");
-            MotorWriting(0, _Tp);
-            delay(500);
-            MotorWriting(0, 0);
-            return true;
-        case '8':
-            Serial.println("TEST: MotorWriting(_Tp, -_Tp)");
-            MotorWriting(_Tp, -_Tp);
-            delay(500);
-            MotorWriting(0, 0);
-            return true;
-        case '9':
-            Serial.println("TEST: MotorWriting(-_Tp, _Tp)");
-            MotorWriting(-_Tp, _Tp);
-            delay(500);
-            MotorWriting(0, 0);
-            return true;
-        default:
-            return false;
-    }
-}
-
-void UIDRead() {
-    if (!mfrc522.PICC_IsNewCardPresent()) return;
-    if (!mfrc522.PICC_ReadCardSerial()) return;
-
-    String uid = "";
-    for (byte i = 0; i < mfrc522.uid.size; i++) {
-        if (mfrc522.uid.uidByte[i] < 0x10) uid += "0";
-        uid += String(mfrc522.uid.uidByte[i], HEX);
-    }
-
-    uid.toUpperCase();
-
-    Serial.print("UID:");
-    Serial.println(uid);
-    Serial3.print("UID:");
-    Serial3.println(uid);
-
-    mfrc522.PICC_HaltA();
-    mfrc522.PCD_StopCrypto1();
-}
-
-void sendATCommand(const char* command) {
-    Serial3.print(command);
-    waitForResponse("", 1000);
-}
-
-bool waitForResponse(const char* expected, unsigned long timeout) {
-    Serial3.setTimeout(timeout);
-    String response = Serial3.readString();
-    if (response.length() > 0) {
-        Serial.print("HM10 Response: ");
-        Serial.println(response);
-    }
-    return response.indexOf(expected) != -1;
-}
-/*===========================define function===========================*/
-
+/*===========================original code===========================*/
 #if 0
 Original `src/main.cpp` backup:
 

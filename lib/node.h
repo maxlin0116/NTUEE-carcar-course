@@ -1,4 +1,7 @@
 /***************************************************************************/
+#pragma once
+
+/***************************************************************************/
 // File			  [node.h]
 // Author		  [Erik Kuo, Joshua Lin]
 // Synopsis		[Code for managing car movement when encounter a node]
@@ -7,8 +10,10 @@
 /***************************************************************************/
 
 /*===========================import variable===========================*/
-int extern _Tp;
+extern int _Tp;
 /*===========================import variable===========================*/
+
+void MotorWriting(double vL, double vR);
 
 constexpr unsigned long NODE_ADVANCE_DELAY = 80;
 constexpr unsigned long NODE_TURN_DELAY = 500;
