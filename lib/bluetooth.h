@@ -1,14 +1,19 @@
 /***************************************************************************/
-// File			  [bluetooth.h]
-// Author		  [Erik Kuo]
-// Synopsis		[Code for bluetooth communication]
-// Functions  [ask_BT, send_msg, send_byte]
-// Modify		  [2020/03/27 Erik Kuo]
+#pragma once
+
+#include <Arduino.h>
+
+// bluetooth.h
+/***************************************************************************/
+// File       [bluetooth.h]
+// Author     [Max Lin]
+// Synopsis   [Code for managing Bluetooth communication]
+// Functions  [ask_BT, send_msg, send_byte, waitForResponse, sendATCommand]
+// Modify     [2026/04/04 Max Lin]
 /***************************************************************************/
 
-/*if you have no idea how to start*/
-/*check out what you have learned from week 2*/
 
+// Bluetooth command definitions
 enum BT_CMD {
     NOTHING,
     GO,
@@ -20,53 +25,32 @@ enum BT_CMD {
     FORWARD,
 };
 
-BT_CMD ask_BT() {
+// ask Bluetooth for command, return NOTHING if no command received
+inline BT_CMD ask_BT() {
     BT_CMD message = NOTHING;
     char cmd;
     if (Serial3.available()) {
         cmd = Serial3.read();
         switch (cmd) {
             case 'G':
-            case 'g':
-            case 'A':
-            case 'a':
-            case 'T':
-            case 't':
                 message = GO;
                 break;
             case 'H':
-            case 'h':
-            case 'P':
-            case 'p':
-            case 'X':
-            case 'x':
                 message = HALT;
                 break;
             case 'L':
-            case 'l':
-            case '2':
                 message = LEFT;
                 break;
             case 'R':
-            case 'r':
-            case '1':
                 message = RIGHT;
                 break;
             case 'B':
-            case 'b':
-            case 'U':
-            case 'u':
-            case '3':
                 message = BACK;
                 break;
             case 'S':
-            case 's':
-            case '0':
                 message = STOP;
                 break;
             case 'F':
-            case 'f':
-            case '4':
                 message = FORWARD;
                 break;
             default:
@@ -79,30 +63,29 @@ BT_CMD ask_BT() {
 #endif
     }
     return message;
-}  // ask_BT
+}
 
-// send msg back through Serial1(bluetooth serial)
-// can use send_byte alternatively to send msg back
-// (but need to convert to byte type)
-void send_msg(const char& msg) {
+// send msg back through Serial3(bluetooth serial)
+inline void send_msg(const char& msg) {
     Serial3.write(msg);
-}  // send_msg
+}
 
 // send UID back through Serial3(bluetooth serial)
-void send_byte(byte* id, byte& idSize) {
+inline void send_byte(byte* id, byte& idSize) {
     for (byte i = 0; i < idSize; i++) {  // Send UID consequently.
         Serial3.print(id[i]);
     }
-#ifdef DEBUG
-    Serial.print("Sent id: ");
-    for (byte i = 0; i < idSize; i++) {  // Show UID consequently.
-        Serial.print(id[i], HEX);
-    }
-    Serial.println();
-#endif
-}  // send_byte
+	#ifdef DEBUG
+		Serial.print("Sent id: ");
+		for (byte i = 0; i < idSize; i++) {  // Show UID consequently.
+			Serial.print(id[i], HEX);
+		}
+		Serial.println();
+	#endif
+}
 
-bool waitForResponse(const char* expected, unsigned long timeout) {
+// Wait for a specific response from the Bluetooth module within a timeout period
+inline bool waitForResponse(const char* expected, unsigned long timeout) {
     Serial3.setTimeout(timeout);
     String response = Serial3.readString();
     if (response.length() > 0) {
@@ -112,7 +95,8 @@ bool waitForResponse(const char* expected, unsigned long timeout) {
     return response.indexOf(expected) != -1;
 }
 
-void sendATCommand(const char* command) {
+// Send an AT command to the Bluetooth module and wait for a response
+inline void sendATCommand(const char* command) {
     Serial3.print(command);
     waitForResponse("", 1000);
 }

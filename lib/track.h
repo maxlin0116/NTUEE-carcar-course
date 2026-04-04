@@ -3,19 +3,16 @@
 
 /***************************************************************************/
 // File			  [track.h]
-// Author		  [Erik Kuo]
-// Synopsis		[Code used for tracking]
-// Functions  [MotorWriting, MotorInverter, tracking]
-// Modify		  [2020/03/27 Erik Kuo]
+// Author		  [Max Lin]
+// Synopsis		[Code for tracking]
+// Functions  [tracking]
+// Modify		  [2026/04/04 Max Lin]
 /***************************************************************************/
 
-/*if you have no idea how to start*/
-/*check out what you have learned from week 1 & 6*/
-/*feel free to add your own function for convenience*/
+#include "hardware.h"
 
 /*===========================import variable===========================*/
 extern int _Tp;
-/*===========================import variable===========================*/
 
 // Write the voltage to motor.
 inline void MotorWriting(double vL, double vR) {
@@ -54,4 +51,4 @@ inline void tracking(int l2, int l1, int m0, int r1, int r2) {
     vR = constrain(_Tp - powerCorrection, -255, 255);
     vL = constrain(_Tp + 5 * powerCorrection, -255, 255);
     MotorWriting(adj_L * vL, adj_R * vR);
-}  // tracking
+}

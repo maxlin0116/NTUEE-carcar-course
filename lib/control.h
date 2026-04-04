@@ -1,21 +1,210 @@
 /***************************************************************************/
+#pragma once
+
+/***************************************************************************/
 // File       [control.h]
-// Synopsis   [State handling and node-search control logic]
+// Author     [Max Lin]
+// Synopsis   [Code for managing main process]
+// Functions  [SetState, Search]
+// Modify     [2026/04/04 Max Lin]
 /***************************************************************************/
 
+#include "hardware.h"
+#include "node.h"
+#include "track.h"
+
+
+// shared variables
 extern int l2, l1, m0, r1, r2;
 extern int _Tp;
 extern bool state;
 extern char queued_node_cmd;
 
+// check if the command is a node command, if so, execute it and return true. Otherwise return false.
+inline bool IsNodeCommand(char cmd) {
+	return cmd == 'L' || cmd == 'R' || cmd == 'B' || cmd == 'S' || cmd == 'F';
+}
+
+// execute the node command, return true if the command is valid, false otherwise.
+inline bool ExecuteNodeCommand(char cmd) {
+	switch (cmd) {
+		case 'L':
+			node_left_turn();
+			return true;
+		case 'R':
+			node_right_turn();
+			return true;
+		case 'B':
+			node_u_turn();
+			return true;
+		case 'S':
+			node_stop();
+			return true;
+		case 'F':
+			node_forward();
+			return true;
+		default:
+			return false;
+	}
+}
+
+// check if the command is a run command, if so, set state to true and return true. Otherwise return false.
 inline bool IsRunCommand(char cmd) {
-	return cmd == 'G' || cmd == 'g' || cmd == 'A' || cmd == 'a' || cmd == 'T' || cmd == 't';
+	return cmd == 'G';
 }
 
+// check if the command is a halt command, if so, set state to false and return true. Otherwise return false.
 inline bool IsHaltCommand(char cmd) {
-	return cmd == 'H' || cmd == 'h' || cmd == 'P' || cmd == 'p' || cmd == 'X' || cmd == 'x';
+	return cmd == 'H';
 }
 
+// read commands from Serial3 and set state accordingly. Also handle node command queuing and motor test commands.
+inline void SetState() {
+	while (Serial3.available()) {
+		const char cmd = Serial3.read();
+	#ifdef DEBUG
+			Serial.print("BT state cmd: ");
+			if (cmd == '\r') {
+				Serial.println("\\r");
+			} else if (cmd == '\n') {
+				Serial.println("\\n");
+			} else {
+				Serial.println(cmd);
+			}
+	#endif
+		if (IsRunCommand(cmd)) {
+			state = true;
+	#ifdef DEBUG
+				Serial.print("State -> RUN via ");
+				Serial.println(cmd);
+	#endif
+			} else if (IsHaltCommand(cmd)) {
+				state = false;
+	#ifdef DEBUG
+				Serial.print("State -> HALT via ");
+				Serial.println(cmd);
+	#endif
+			} else if (IsNodeCommand(cmd)) {
+				queued_node_cmd = cmd;
+	#ifdef DEBUG
+				Serial.print("Queued node cmd: ");
+				Serial.println(cmd);
+	#endif
+			} else if (!HandleMotorTestCommand(cmd)) {
+	#ifdef DEBUG
+				Serial.print("Ignored cmd: ");
+				Serial.println(cmd);
+	#endif
+		}
+	}
+}
+
+// main search function, called when state is active. Handle both tracking and node process.
+inline void Search() {
+	static char pending_cmd = 0;				// pending node command to execute when reaching the node, 0 if no pending command
+	static bool waiting_at_node = false;
+	const int raw_l2 = analogRead(IRpin_LL);
+	const int raw_l1 = analogRead(IRpin_L);
+	const int raw_m0 = analogRead(IRpin_M);
+	const int raw_r1 = analogRead(IRpin_R);
+	const int raw_r2 = analogRead(IRpin_RR);
+
+	l2 = raw_l2;
+	l1 = raw_l1;
+	m0 = raw_m0;
+	r1 = raw_r1;
+	r2 = raw_r2;
+
+	// if there's a queued node command, override the pending_cmd with it. This ensures that the car will execute the most recent node command when it reaches the node.
+	if (queued_node_cmd) {
+		pending_cmd = queued_node_cmd;
+		queued_node_cmd = 0;
+		#ifdef DEBUG
+				Serial.print("Search cmd: ");
+				Serial.println(pending_cmd);
+		#endif
+	}
+
+	const bool at_node = node_is_active();
+	#ifdef DEBUG
+		Serial.print("RAW ");
+		Serial.print(raw_l2);
+		Serial.print(" ");
+		Serial.print(raw_l1);
+		Serial.print(" ");
+		Serial.print(raw_m0);
+		Serial.print(" ");
+		Serial.print(raw_r1);
+		Serial.print(" ");
+		Serial.println(raw_r2);
+		Serial.print("IR ");
+		Serial.print(l2);
+		Serial.print(" ");
+		Serial.print(l1);
+		Serial.print(" ");
+		Serial.print(m0);
+		Serial.print(" ");
+		Serial.print(r1);
+		Serial.print(" ");
+		Serial.print(r2);
+		Serial.print(" | at_node=");
+		Serial.println(at_node);
+	#endif
+
+	// if we're waiting at the node, we will only execute the pending node command when the car is still at the node. If the car has left the node, we will clear the pending node command and stop waiting.
+	if (waiting_at_node) {
+		MotorWriting(0, 0);
+		// if the car has left the node, stop waiting and clear pending command. Otherwise, keep waiting and do nothing (i.e. keep the car stopped at the node).
+		if (!pending_cmd) {
+			#ifdef DEBUG
+						Serial.println("Waiting at node");
+			#endif
+			return;
+		}
+
+		while (node_is_active()) {
+			MotorWriting(_Tp, _Tp);
+		}
+
+		MotorWriting(0, 0);
+		delay(60);
+		waiting_at_node = false;
+
+		// if there's a pending node command, execute it. Otherwise, just stop at the node.
+		if (!ExecuteNodeCommand(pending_cmd)) {
+			node_stop();
+		}
+
+		pending_cmd = 0;
+		return;
+	}
+
+	// if we're not at the node, do tracking. If we're at the node, execute the pending node command if there's any, otherwise just stop at the node.
+	if (!at_node) {
+		tracking(l2, l1, m0, r1, r2);
+		return;
+	}
+
+	MotorWriting(0, 0);	// stop at the node first
+	delay(60);			// wait for 60ms to ensure the car has stopped
+
+	
+	if (!pending_cmd) {
+		waiting_at_node = true;
+		MotorWriting(0, 0);
+		return;
+	}
+	if (!ExecuteNodeCommand(pending_cmd)) {
+		node_stop();
+	}
+
+	// after executing the node command, clear the pending command and set waiting_at_node to false to prepare for the next node.
+	pending_cmd = 0;
+	waiting_at_node = false;
+}
+
+
+/*=============below are the test code=============*/
 inline bool HandleMotorTestCommand(char cmd) {
 	switch (cmd) {
 		case '5':
@@ -51,185 +240,4 @@ inline bool HandleMotorTestCommand(char cmd) {
 		default:
 			return false;
 	}
-}
-
-inline void SetState() {
-	while (Serial3.available()) {
-		const char cmd = Serial3.read();
-#ifdef DEBUG
-		Serial.print("BT state cmd: ");
-		if (cmd == '\r') {
-			Serial.println("\\r");
-		} else if (cmd == '\n') {
-			Serial.println("\\n");
-		} else {
-			Serial.println(cmd);
-		}
-#endif
-		if (IsRunCommand(cmd)) {
-			state = true;
-#ifdef DEBUG
-			Serial.print("State -> RUN via ");
-			Serial.println(cmd);
-#endif
-		} else if (IsHaltCommand(cmd)) {
-			state = false;
-#ifdef DEBUG
-			Serial.print("State -> HALT via ");
-			Serial.println(cmd);
-#endif
-		} else if (!HandleMotorTestCommand(cmd)) {
-			queued_node_cmd = cmd;
-#ifdef DEBUG
-			Serial.print("Queued node cmd: ");
-			Serial.println(cmd);
-#endif
-		}
-	}
-}
-
-inline void Search() {
-	static char pending_cmd = 0;
-	static bool waiting_at_node = false;
-	const int raw_l2 = analogRead(IRpin_LL);
-	const int raw_l1 = analogRead(IRpin_L);
-	const int raw_m0 = analogRead(IRpin_M);
-	const int raw_r1 = analogRead(IRpin_R);
-	const int raw_r2 = analogRead(IRpin_RR);
-
-	l2 = raw_l2;
-	l1 = raw_l1;
-	m0 = raw_m0;
-	r1 = raw_r1;
-	r2 = raw_r2;
-
-	if (queued_node_cmd) {
-		pending_cmd = queued_node_cmd;
-		queued_node_cmd = 0;
-#ifdef DEBUG
-		Serial.print("Search cmd: ");
-		Serial.println(pending_cmd);
-#endif
-	}
-
-	const bool at_node = node_is_active();
-#ifdef DEBUG
-	Serial.print("RAW ");
-	Serial.print(raw_l2);
-	Serial.print(" ");
-	Serial.print(raw_l1);
-	Serial.print(" ");
-	Serial.print(raw_m0);
-	Serial.print(" ");
-	Serial.print(raw_r1);
-	Serial.print(" ");
-	Serial.println(raw_r2);
-	Serial.print("IR ");
-	Serial.print(l2);
-	Serial.print(" ");
-	Serial.print(l1);
-	Serial.print(" ");
-	Serial.print(m0);
-	Serial.print(" ");
-	Serial.print(r1);
-	Serial.print(" ");
-	Serial.print(r2);
-	Serial.print(" | at_node=");
-	Serial.println(at_node);
-#endif
-
-	if (waiting_at_node) {
-		MotorWriting(0, 0);
-		if (!pending_cmd) {
-#ifdef DEBUG
-			Serial.println("Waiting at node");
-#endif
-			return;
-		}
-
-		while (node_is_active()) {
-			MotorWriting(_Tp, _Tp);
-		}
-		MotorWriting(0, 0);
-		delay(60);
-		waiting_at_node = false;
-
-		switch (pending_cmd) {
-			case 'L':
-			case 'l':
-			case '2':
-				node_left_turn();
-				break;
-			case 'R':
-			case 'r':
-			case '1':
-				node_right_turn();
-				break;
-			case 'B':
-			case 'b':
-			case 'U':
-			case 'u':
-			case '3':
-				node_u_turn();
-				break;
-			case 'S':
-			case 's':
-			case '0':
-				node_stop();
-				break;
-			case 'F':
-			case 'f':
-			case '4':
-			default:
-				node_forward();
-				break;
-		}
-
-		pending_cmd = 0;
-		return;
-	}
-
-	if (!at_node) {
-		tracking(l2, l1, m0, r1, r2);
-		return;
-	}
-
-	MotorWriting(0, 0);
-
-	if (!pending_cmd) {
-		waiting_at_node = true;
-		MotorWriting(0, 0);
-		return;
-	}
-
-	switch (pending_cmd) {
-		case 'L':
-		case 'l':
-		case '2':
-			node_left_turn();
-			break;
-		case 'R':
-		case 'r':
-		case '1':
-			node_right_turn();
-			break;
-		case 'B':
-		case 'b':
-		case '3':
-			node_u_turn();
-			break;
-		case 'S':
-		case 's':
-		case '0':
-			node_stop();
-			break;
-		case 'F':
-		case 'f':
-		case '4':
-		default:
-			node_forward();
-			break;
-	}
-
-	pending_cmd = 0;
 }

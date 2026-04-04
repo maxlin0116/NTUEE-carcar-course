@@ -1,4 +1,7 @@
 /***************************************************************************/
+#pragma once
+
+/***************************************************************************/
 // File       [RFID.h]
 // Author     [Erik Kuo]
 // Synopsis   [Code for getting UID from RFID card]
@@ -9,10 +12,11 @@
 /*===========================don't change anything in this file===========================*/
 
 #include <MFRC522.h>  // 引用程式庫
+#include "hardware.h"
 #include <SPI.h>
 /* pin---- SDA:9 SCK:13 MOSI:11 MISO:12 GND:GND RST:define on your own  */
 
-byte* rfid(byte& idSize) {
+inline byte* rfid(byte& idSize) {
     // 確認是否有新卡片
     if (mfrc522.PICC_IsNewCardPresent() && mfrc522.PICC_ReadCardSerial()) {
         byte* id = mfrc522.uid.uidByte;  // 取得卡片的UID
@@ -39,7 +43,7 @@ byte* rfid(byte& idSize) {
     return 0;
 }
 
-void UIDRead() {
+inline void UIDRead() {
     if (!mfrc522.PICC_IsNewCardPresent()) return;
     if (!mfrc522.PICC_ReadCardSerial()) return;
 
