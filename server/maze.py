@@ -12,7 +12,7 @@ from node import Direction, Node
 
 log = logging.getLogger(__name__)
 
-
+# The Action enum represents the possible actions the car can take based on its current direction and the direction to the next node.
 class Action(IntEnum):
     ADVANCE = 1
     U_TURN = 2
@@ -20,8 +20,9 @@ class Action(IntEnum):
     TURN_LEFT = 4
     HALT = 5
 
-
+# The Maze class represents the maze structure and provides methods for pathfinding and action generation.
 class Maze:
+    # The constructor reads the maze structure from a CSV file and initializes the nodes and their connections.
     def __init__(self, filepath: str):
         self.raw_data = pandas.read_csv(filepath).values
         self.nodes = []
@@ -30,19 +31,23 @@ class Maze:
         if len(self.raw_data) == 0:
             return
 
+		# The direction_columns variable defines the columns in the CSV file that correspond to the neighboring nodes and their distances, along with the direction from the current node to the neighbor.
         direction_columns = (
+            # neighbor_col, distance_col, direction
             (1, 5, Direction.NORTH),
             (2, 6, Direction.SOUTH),
             (3, 7, Direction.WEST),
             (4, 8, Direction.EAST),
         )
-
+		
+		# First, we create Node objects for each row in the CSV file and store them in a list and a dictionary for easy access.
         for row in self.raw_data:
             node_index = int(row[0])
             node = Node(node_index)
             self.nodes.append(node)
             self.node_dict[node_index] = node
 
+		# Next, we iterate through the rows again to establish the connections between the nodes based on the neighboring node indices and their corresponding directions and distances.
         for row in self.raw_data:
             node = self.node_dict[int(row[0])]
             for neighbor_col, distance_col, direction in direction_columns:
@@ -57,15 +62,18 @@ class Maze:
                     1 if pandas.isna(distance) else int(distance),
                 )
 
+	# The get_start_point method returns the starting node of the maze, which is assumed to be the node with index 1. If there are fewer than 2 nodes in the maze, it logs an error and returns 0.
     def get_start_point(self):
         if len(self.node_dict) < 2:
             log.error("Error: the start point is not included.")
             return 0
         return self.node_dict[1]
 
+	# The get_node_dict method returns the dictionary of nodes, which can be used for quick access to nodes based on their indices.
     def get_node_dict(self):
         return self.node_dict
 
+	# The BFS method performs a breadth-first search starting from the given node to find the nearest unexplored dead-end in the maze. It uses a queue to explore the nodes level by level and a set to keep track of visited nodes. The parent dictionary is used to reconstruct the path once an unexplored dead-end is found. Currently, this method is a placeholder and returns None.
     def BFS(self, node: Node):
         queue = deque([node])
         visited = {node}
@@ -73,6 +81,7 @@ class Maze:
         # Tips : return a sequence of nodes from the node to the nearest unexplored deadend
         return None
 
+	# The BFS_2 method performs a breadth-first search to find the shortest path from node_from to node_to. It uses a queue to explore the nodes and a set to keep track of visited nodes. The parent dictionary is used to reconstruct the path once node_to is found. If either node_from or node_to is None, it returns None. If node_from is the same as node_to, it returns a list containing just that node. If no path is found, it returns None.
     def BFS_2(self, node_from: Node, node_to: Node):
         if node_from is None or node_to is None:
             return None
@@ -105,6 +114,7 @@ class Maze:
 
         return None
 
+	# The getAction method determines the action to take based on the current car direction and the next node.
     def getAction(self, car_dir, node_from: Node, node_to: Node):
         if not node_from.is_successor(node_to):
             print(
@@ -154,14 +164,16 @@ class Maze:
 
         return actions
 
+	# The path_to_str method converts a list of nodes into a string representation of the path, where each node index is separated by " -> ".
     def path_to_str(self, nodes: List[Node]):
         if not nodes:
             return ""
         return " -> ".join(str(node.get_index()) for node in nodes)
 
+	# The actions_to_str method converts a list of actions into a string representation, where each action is represented by a character (f for advance, b for u-turn, r for turn right, l for turn left, and s for halt). It uses a mapping of action integers to characters to generate the string.
     def actions_to_str(self, actions):
         # cmds should be a string sequence like "fbrl....", use it as the input of BFS checklist #1
-        cmd = "fbrls"
+        cmd = "fbrls" # f for advance, b for u-turn, r for turn right, l for turn left, s for halt
         cmds = ""
         for action in actions:
             cmds += cmd[action - 1]
