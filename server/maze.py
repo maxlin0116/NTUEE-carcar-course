@@ -151,12 +151,12 @@ class Maze:
         }
         return action_map[Direction(car_dir)][next_dir], next_dir
 
-    def getActions(self, nodes: List[Node]):
+    def getActions(self, nodes: List[Node], start_dir=Direction.SOUTH):
         if len(nodes) < 2:
             return []
 
         actions = []
-        car_dir = Direction.SOUTH
+        car_dir = Direction(start_dir)
 
         for i in range(len(nodes) - 1):
             action, car_dir = self.getAction(car_dir, nodes[i], nodes[i + 1])
@@ -179,6 +179,10 @@ class Maze:
             cmds += cmd[action - 1]
         log.info(cmds)
         return cmds
+
+    def actions_to_car_cmds(self, actions):
+        cmd = "FBRLS"
+        return "".join(cmd[action - 1] for action in actions)
 
     def strategy(self, node: Node):
         return self.BFS(node)

@@ -20,9 +20,18 @@ extern int _Tp;
 extern bool state;
 extern char queued_node_cmd;
 
+inline bool HandleMotorTestCommand(char cmd);
+
 // check if the command is a node command, if so, execute it and return true. Otherwise return false.
 inline bool IsNodeCommand(char cmd) {
 	return cmd == 'L' || cmd == 'R' || cmd == 'B' || cmd == 'S' || cmd == 'F';
+}
+
+inline void ReportNodeEvent() {
+	Serial3.println("EVENT:NODE");
+#ifdef DEBUG
+	Serial.println("BT event: EVENT:NODE");
+#endif
 }
 
 // execute the node command, return true if the command is valid, false otherwise.
@@ -103,6 +112,7 @@ inline void SetState() {
 inline void Search() {
 	static char pending_cmd = 0;				// pending node command to execute when reaching the node, 0 if no pending command
 	static bool waiting_at_node = false;
+	static bool node_event_reported = false;
 	const int raw_l2 = analogRead(IRpin_LL);
 	const int raw_l1 = analogRead(IRpin_L);
 	const int raw_m0 = analogRead(IRpin_M);
@@ -156,6 +166,10 @@ inline void Search() {
 		MotorWriting(0, 0);
 		// if the car has left the node, stop waiting and clear pending command. Otherwise, keep waiting and do nothing (i.e. keep the car stopped at the node).
 		if (!pending_cmd) {
+			if (!node_event_reported) {
+				ReportNodeEvent();
+				node_event_reported = true;
+			}
 			#ifdef DEBUG
 						Serial.println("Waiting at node");
 			#endif
@@ -169,6 +183,7 @@ inline void Search() {
 		MotorWriting(0, 0);
 		delay(60);
 		waiting_at_node = false;
+		node_event_reported = false;
 
 		// if there's a pending node command, execute it. Otherwise, just stop at the node.
 		if (!ExecuteNodeCommand(pending_cmd)) {
@@ -181,6 +196,7 @@ inline void Search() {
 
 	// if we're not at the node, do tracking. If we're at the node, execute the pending node command if there's any, otherwise just stop at the node.
 	if (!at_node) {
+		node_event_reported = false;
 		tracking(l2, l1, m0, r1, r2);
 		return;
 	}
@@ -191,6 +207,10 @@ inline void Search() {
 	
 	if (!pending_cmd) {
 		waiting_at_node = true;
+		if (!node_event_reported) {
+			ReportNodeEvent();
+			node_event_reported = true;
+		}
 		MotorWriting(0, 0);
 		return;
 	}
@@ -201,6 +221,7 @@ inline void Search() {
 	// after executing the node command, clear the pending command and set waiting_at_node to false to prepare for the next node.
 	pending_cmd = 0;
 	waiting_at_node = false;
+	node_event_reported = false;
 }
 
 

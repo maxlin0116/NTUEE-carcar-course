@@ -2,12 +2,22 @@ import abc
 import csv
 import logging
 import re
+import time
+from dataclasses import dataclass
 from typing import Optional, Tuple, cast
 
 import requests
 import socketio
 
 log = logging.getLogger("scoreboard")
+
+
+@dataclass(frozen=True)
+class UIDSubmissionResult:
+    uid: str
+    score: int
+    time_remaining: float
+    message: str
 
 
 class Scoreboard(abc.ABC):
@@ -25,21 +35,36 @@ class Scoreboard(abc.ABC):
         """Fetch current score from server. Returns current score."""
         pass
 
+    def submit_UID(self, UID_str: str) -> UIDSubmissionResult:
+        score, time_remaining = self.add_UID(UID_str)
+        return UIDSubmissionResult(
+            uid=UID_str,
+            score=score,
+            time_remaining=time_remaining,
+            message="",
+        )
+
 
 class ScoreboardFake(Scoreboard):
     """
     Fake scoreboard. Check uid with fakeUID.csv
     """
 
-    def __init__(self, teamname, filepath):
+    def __init__(self, teamname, filepath, game_duration: float = 70.0):
         self.total_score = 0
         self.team = teamname
+        self.game_duration = float(game_duration)
+        self.start_time = time.monotonic()
         log.info(f"Using fake scoreboard!")
         log.info(f"{self.team} is playing game!")
 
         self._read_UID_file(filepath)
 
         self.visit_list = set()
+
+    def _time_remaining(self) -> float:
+        elapsed = time.monotonic() - self.start_time
+        return max(0.0, round(self.game_duration - elapsed, 1))
 
     def _read_UID_file(self, filepath: str):
         self.uid_to_score = {}
@@ -51,7 +76,7 @@ class ScoreboardFake(Scoreboard):
                 self.uid_to_score[uid] = int(score)
         log.info("Successfully read the UID file!")
 
-    def add_UID(self, UID_str: str) -> Tuple[int, float]:
+    def submit_UID(self, UID_str: str) -> UIDSubmissionResult:
         log.debug(f"Adding UID: {UID_str}")
 
         if not isinstance(UID_str, str):
@@ -63,17 +88,40 @@ class ScoreboardFake(Scoreboard):
             )
 
         if UID_str not in self.uid_to_score:
-            log.info(f"This UID is not in the list: {UID_str}")
-            return 0, 0
+            message = f"Invalid UID {UID_str}"
+            log.info(message)
+            return UIDSubmissionResult(
+                uid=UID_str,
+                score=0,
+                time_remaining=self._time_remaining(),
+                message=message,
+            )
         elif UID_str in self.visit_list:
-            log.info(f"This UID has been visited: {UID_str}")
-            return 0, 0
+            message = f"UID {UID_str} already added"
+            log.info(message)
+            return UIDSubmissionResult(
+                uid=UID_str,
+                score=0,
+                time_remaining=self._time_remaining(),
+                message=message,
+            )
         else:
             point = self.uid_to_score[UID_str]
             self.total_score += point
-            log.info(f"A treasure is found! You got {point} points.")
             self.visit_list.add(UID_str)
-            return point, 0
+            time_remaining = self._time_remaining()
+            message = f"Added {point} Points at {time_remaining} seconds left."
+            log.info(message)
+            return UIDSubmissionResult(
+                uid=UID_str,
+                score=point,
+                time_remaining=time_remaining,
+                message=message,
+            )
+
+    def add_UID(self, UID_str: str) -> Tuple[int, float]:
+        result = self.submit_UID(UID_str)
+        return result.score, result.time_remaining
 
     def get_current_score(self):
         return int(self.total_score)
@@ -106,8 +154,8 @@ class ScoreboardServer(Scoreboard):
         res = self.socket.call("start_game", payload, namespace="/team")
         log.info(res)
 
-    def add_UID(self, UID_str: str) -> Tuple[int, float]:
-        """Send {UID_str} to server to update score. Returns nothing."""
+    def submit_UID(self, UID_str: str) -> UIDSubmissionResult:
+        """Send {UID_str} to server and return the full response payload."""
         log.debug(f"Adding UID: {UID_str}")
 
         if not isinstance(UID_str, str):
@@ -121,13 +169,27 @@ class ScoreboardServer(Scoreboard):
         res = self.socket.call("add_UID", UID_str, namespace="/team")
         if not res:
             log.error("Failed to add UID")
-            return 0, 0
+            return UIDSubmissionResult(
+                uid=UID_str,
+                score=0,
+                time_remaining=0,
+                message="Failed to add UID",
+            )
         res = cast(dict, res)
         message = res.get("message", "No message")
         score = res.get("score", 0)
         time_remaining = res.get("time_remaining", 0)
         log.info(message)
-        return score, time_remaining
+        return UIDSubmissionResult(
+            uid=UID_str,
+            score=int(score),
+            time_remaining=float(time_remaining),
+            message=str(message),
+        )
+
+    def add_UID(self, UID_str: str) -> Tuple[int, float]:
+        result = self.submit_UID(UID_str)
+        return result.score, result.time_remaining
 
     def get_current_score(self) -> Optional[int]:
         try:
@@ -157,7 +219,7 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.DEBUG)
 
     try:
-        scoreboard = ScoreboardServer("TeamName3", "http://140.112.175.18")
+        scoreboard = ScoreboardServer("WED3", "http://140.112.175.18")
         # scoreboard = ScoreboardFake("TeamName", "data/fakeUID.csv")
         time.sleep(1)
 
