@@ -19,20 +19,60 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 SERVER_DIR = Path(__file__).resolve().parent
-TEAM_NAME = os.getenv("TEAM_NAME", "WED3")
+TEAM_NAME = os.getenv("TEAM_NAME", "WED1")
 SERVER_URL = os.getenv("SERVER_URL", "http://carcar.ntuee.org/scoreboard")
-MAZE_FILE = os.getenv("MAZE_FILE", "maze.csv")
+MAZE_FILE = os.getenv("MAZE_FILE", str(SERVER_DIR / "maze.csv"))
 BT_PORT = os.getenv("BT_PORT", "COM11")
 EXPECTED_BT_NAME = os.getenv("EXPECTED_BT_NAME", "HM10_G6")
 FAKE_UID_FILE = os.getenv("FAKE_UID_FILE", str(SERVER_DIR / "fakeUID.csv"))
 FAKE_GAME_SECONDS = float(os.getenv("FAKE_GAME_SECONDS", "70"))
+DEFAULT_START_DIR = "south"
+MODE_ALIASES = {
+    "0": "treasure",
+    "treasure": "treasure",
+    "treasure-hunting": "treasure",
+    "hunt": "treasure",
+    "1": "self-test",
+    "self-test": "self-test",
+    "selftest": "self-test",
+    "test": "self-test",
+    "2": "uid",
+    "uid": "uid",
+    "score": "uid",
+    "scoreboard": "uid",
+    "3": "route",
+    "route": "route",
+    "bfs": "bfs",
+    "go": "go",
+    "drive": "go",
+    "map": "map",
+    "bfs-map": "map",
+    "full-map": "map",
+    "explore": "map",
+    "manual": "manual",
+}
 
 
 def parse_args():
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(
+        description="NTUEE CarCar command-line entry point.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "Examples:\n"
+            "  python server\\main.py manual\n"
+            "  python server\\main.py go --from-node 1 --to-node 10 --start-dir south\n"
+            "  python server\\main.py bfs --start-node 1 --goal-node 10 --start-dir south\n"
+            "  python server\\main.py bfs --start-node 1 --goal-node 10 --drive-bt\n"
+            "  python server\\main.py map --start-node 1 --start-dir south --drive-bt\n"
+            "  python server\\main.py uid --uid 10BA617E --fake-scoreboard"
+        ),
+    )
     parser.add_argument(
         "mode",
-        help="0: treasure-hunting, 1: self-testing, 2: server UID integration, 3: BFS route integration",
+        help=(
+            "Mode name or legacy number: treasure/0, self-test/1, uid/2, "
+            "route/3, bfs, go, map, manual"
+        ),
         type=str,
     )
     parser.add_argument("--maze-file", default=MAZE_FILE, help="Maze file", type=str)
@@ -70,21 +110,44 @@ def parse_args():
         help="Countdown duration for --fake-scoreboard",
         type=float,
     )
-    parser.add_argument("--start-node", help="BFS route start node index", type=int)
-    parser.add_argument("--goal-node", help="BFS route goal node index", type=int)
+    parser.add_argument(
+        "--start-node",
+        "--from-node",
+        dest="start_node",
+        help="Route or map start node index",
+        type=int,
+    )
+    parser.add_argument(
+        "--goal-node",
+        "--to-node",
+        dest="goal_node",
+        help="Point-to-point BFS goal node index",
+        type=int,
+    )
     parser.add_argument(
         "--start-dir",
-        default="south",
+        default=None,
         choices=("north", "south", "west", "east"),
-        help="Car heading at the start node for BFS route execution",
+        help="Car heading at the start node for BFS route execution. If omitted, prompt interactively.",
+        type=str,
+    )
+    parser.add_argument(
+        "--drive-mode",
+        choices=("manual", "bfs"),
+        help="Skip the manual/bfs prompt in route mode",
         type=str,
     )
     parser.add_argument(
         "--drive-bt",
         action="store_true",
-        help="In BFS mode, send commands to the car through Bluetooth automatically",
+        help="In route/map mode, send commands to the car through Bluetooth automatically",
     )
-    return parser.parse_args()
+    args = parser.parse_args()
+    try:
+        args.mode = normalize_mode(args.mode)
+    except ValueError as exc:
+        parser.error(str(exc))
+    return args
 
 
 def format_seconds_left(seconds_left: float) -> str:
@@ -128,6 +191,14 @@ def parse_direction(direction_name: str) -> Direction:
     return direction_map[direction_name.lower()]
 
 
+def normalize_mode(mode_name: str) -> str:
+    normalized = MODE_ALIASES.get(mode_name.strip().lower())
+    if normalized is None:
+        valid_modes = ", ".join(sorted(MODE_ALIASES))
+        raise ValueError(f"Unknown mode '{mode_name}'. Valid modes: {valid_modes}")
+    return normalized
+
+
 def build_bfs_plan(
     maze: Maze,
     start_node: int,
@@ -150,6 +221,26 @@ def build_bfs_plan(
     return path, actions, car_cmds
 
 
+def build_bfs_map_plan(
+    maze: Maze,
+    start_node: int,
+    start_dir: Direction,
+):
+    node_dict = maze.get_node_dict()
+    node_from = node_dict.get(start_node)
+
+    if node_from is None:
+        raise ValueError(f"Unknown start node index: {start_node}")
+
+    visit_order, path = maze.build_bfs_walk(node_from)
+    if not visit_order:
+        raise ValueError(f"No reachable nodes found from node {start_node}")
+
+    actions = maze.getActions(path, start_dir)
+    car_cmds = maze.actions_to_car_cmds(actions)
+    return visit_order, path, actions, car_cmds
+
+
 def prompt_for_node(name: str) -> int:
     while True:
         value = input(f"{name} node> ").strip()
@@ -169,6 +260,12 @@ def prompt_for_start_direction(default_direction: str) -> Direction:
         if value in choices:
             return parse_direction(value)
         print("Please enter north, south, west, or east.")
+
+
+def resolve_start_direction(start_direction: Optional[str]) -> Direction:
+    if start_direction:
+        return parse_direction(start_direction)
+    return prompt_for_start_direction(DEFAULT_START_DIR)
 
 
 def wait_for_start_command() -> bool:
@@ -250,25 +347,17 @@ def prepare_bt_interface(bt_port: str, expected_bt_name: str) -> BTInterface:
     return interface
 
 
-def run_bfs_route(
-    maze: Maze,
-    start_node: int,
-    goal_node: int,
-    start_dir: Direction,
+def execute_car_command_plan(
+    car_cmds: str,
     drive_bt: bool,
-    interface: Optional[BTInterface] = None,
+    interface: Optional[BTInterface],
+    completion_message: str,
 ):
-    path, actions, car_cmds = build_bfs_plan(maze, start_node, goal_node, start_dir)
-
-    print(f"Path: {maze.path_to_str(path)}")
-    print(f"Actions: {maze.actions_to_str(actions)}")
-    print(f"Car commands: {car_cmds or '(already at goal)'}")
-
     if not drive_bt:
         return
 
     if not car_cmds:
-        print("Already at goal node. No Bluetooth commands sent.")
+        print("No Bluetooth commands need to be sent for this plan.")
         return
 
     if interface is None:
@@ -284,7 +373,7 @@ def run_bfs_route(
     interface.send_command("G")
     time.sleep(0.1)
     interface.send_command(car_cmds[0])
-    print(f"Sent run command: G")
+    print("Sent run command: G")
     print(f"Sent node command 1/{len(car_cmds)}: {car_cmds[0]}")
 
     next_index = 1
@@ -302,13 +391,57 @@ def run_bfs_route(
                         print(f"Sent node command {next_index}/{len(car_cmds)}: {command}")
                     else:
                         interface.send_command("H")
-                        print(f"Reached goal node {goal_node}. Sent halt command: H")
+                        print(completion_message)
                         return
             time.sleep(0.05)
     except KeyboardInterrupt:
         print()
         interface.send_command("H")
         log.info("BFS auto-drive interrupted. Sent halt command.")
+
+
+def run_bfs_route(
+    maze: Maze,
+    start_node: int,
+    goal_node: int,
+    start_dir: Direction,
+    drive_bt: bool,
+    interface: Optional[BTInterface] = None,
+):
+    path, actions, car_cmds = build_bfs_plan(maze, start_node, goal_node, start_dir)
+
+    print(f"Path: {maze.path_to_str(path)}")
+    print(f"Actions: {maze.actions_to_str(actions)}")
+    print(f"Car commands: {car_cmds or '(already at goal)'}")
+    execute_car_command_plan(
+        car_cmds=car_cmds,
+        drive_bt=drive_bt,
+        interface=interface,
+        completion_message=f"Reached goal node {goal_node}. Sent halt command: H",
+    )
+
+
+def run_bfs_map(
+    maze: Maze,
+    start_node: int,
+    start_dir: Direction,
+    drive_bt: bool,
+    interface: Optional[BTInterface] = None,
+):
+    visit_order, path, actions, car_cmds = build_bfs_map_plan(
+        maze, start_node, start_dir
+    )
+
+    print(f"BFS visit order: {maze.path_to_str(visit_order)}")
+    print(f"Drive path: {maze.path_to_str(path)}")
+    print(f"Actions: {maze.actions_to_str(actions)}")
+    print(f"Car commands: {car_cmds or '(already at start)'}")
+    execute_car_command_plan(
+        car_cmds=car_cmds,
+        drive_bt=drive_bt,
+        interface=interface,
+        completion_message="Finished BFS map traversal. Sent halt command: H",
+    )
 
 
 def listen_for_uids(point, interface: BTInterface, bt_port: str):
@@ -345,7 +478,7 @@ def build_scoreboard(
 
 
 def main(
-    mode: int,
+    mode: str,
     bt_port: str,
     team_name: str,
     server_url: str,
@@ -357,17 +490,31 @@ def main(
     fake_game_seconds: float = FAKE_GAME_SECONDS,
     start_node: Optional[int] = None,
     goal_node: Optional[int] = None,
-    start_dir: str = "south",
+    start_dir: Optional[str] = None,
+    drive_mode: Optional[str] = None,
     drive_bt: bool = False,
     expected_bt_name: str = EXPECTED_BT_NAME,
 ):
+    mode = normalize_mode(mode)
+    if mode == "manual":
+        mode = "route"
+        drive_mode = "manual"
+        drive_bt = True
+    elif mode == "bfs":
+        mode = "route"
+        drive_mode = drive_mode or "bfs"
+    elif mode == "go":
+        mode = "route"
+        drive_mode = "bfs"
+        drive_bt = True
+
     start_time = time.time()
     current_node = None
     current_action = None
     visited_nodes = set()
     planned_actions = []
 
-    if mode == "0":
+    if mode == "treasure":
         maze = Maze(maze_file)
         point = build_scoreboard(
             team_name,
@@ -412,7 +559,7 @@ def main(
         else:
             log.info("No treasure nodes found in the maze metadata.")
 
-    elif mode == "1":
+    elif mode == "self-test":
         maze = Maze(maze_file)
         current_score = 0
         log.info("Mode 1: Self-testing mode.")
@@ -452,7 +599,7 @@ def main(
         log.info("Treasure scores: %s", score_map or "None")
         log.info("Current score: %d", current_score)
 
-    elif mode == "2":
+    elif mode == "uid":
         point = build_scoreboard(
             team_name,
             server_url,
@@ -491,12 +638,15 @@ def main(
 
             submit_uid(point, manual_uid)
 
-    elif mode == "3":
+    elif mode == "route":
         interface = None
-        selected_mode = "bfs"
+        selected_mode = drive_mode or "bfs"
+        if selected_mode == "manual":
+            drive_bt = True
+
         if drive_bt:
             interface = prepare_bt_interface(bt_port, expected_bt_name)
-            if start_node is None and goal_node is None:
+            if drive_mode is None and start_node is None and goal_node is None:
                 selected_mode = prompt_drive_mode()
             if selected_mode == "manual":
                 try:
@@ -510,7 +660,7 @@ def main(
         if goal_node is None:
             goal_node = prompt_for_node("Goal")
 
-        chosen_start_dir = prompt_for_start_direction(start_dir)
+        chosen_start_dir = resolve_start_direction(start_dir)
 
         maze = Maze(maze_file)
         log.info(
@@ -521,6 +671,31 @@ def main(
                 maze=maze,
                 start_node=start_node,
                 goal_node=goal_node,
+                start_dir=chosen_start_dir,
+                drive_bt=drive_bt,
+                interface=interface,
+            )
+        finally:
+            if interface is not None:
+                interface.close()
+
+    elif mode == "map":
+        interface = None
+        if drive_bt:
+            interface = prepare_bt_interface(bt_port, expected_bt_name)
+
+        if start_node is None:
+            start_node = prompt_for_node("Start")
+        if goal_node is not None:
+            log.warning("Ignoring goal node %d in full-map BFS mode.", goal_node)
+
+        chosen_start_dir = resolve_start_direction(start_dir)
+        maze = Maze(maze_file)
+        log.info("Full-map BFS traversal from node %d.", start_node)
+        try:
+            run_bfs_map(
+                maze=maze,
+                start_node=start_node,
                 start_dir=chosen_start_dir,
                 drive_bt=drive_bt,
                 interface=interface,

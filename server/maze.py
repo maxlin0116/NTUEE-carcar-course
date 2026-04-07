@@ -73,13 +73,26 @@ class Maze:
     def get_node_dict(self):
         return self.node_dict
 
-	# The BFS method performs a breadth-first search starting from the given node to find the nearest unexplored dead-end in the maze. It uses a queue to explore the nodes level by level and a set to keep track of visited nodes. The parent dictionary is used to reconstruct the path once an unexplored dead-end is found. Currently, this method is a placeholder and returns None.
+	# The BFS method returns the reachable nodes in breadth-first visitation order.
     def BFS(self, node: Node):
+        if node is None:
+            return []
+
         queue = deque([node])
         visited = {node}
-        parent = {node: None}
-        # Tips : return a sequence of nodes from the node to the nearest unexplored deadend
-        return None
+        order = []
+
+        while queue:
+            current = queue.popleft()
+            order.append(current)
+
+            for successor, _, _ in current.get_successors():
+                if successor in visited:
+                    continue
+                visited.add(successor)
+                queue.append(successor)
+
+        return order
 
 	# The BFS_2 method performs a breadth-first search to find the shortest path from node_from to node_to. It uses a queue to explore the nodes and a set to keep track of visited nodes. The parent dictionary is used to reconstruct the path once node_to is found. If either node_from or node_to is None, it returns None. If node_from is the same as node_to, it returns a list containing just that node. If no path is found, it returns None.
     def BFS_2(self, node_from: Node, node_to: Node):
@@ -183,6 +196,26 @@ class Maze:
     def actions_to_car_cmds(self, actions):
         cmd = "FBRLS"
         return "".join(cmd[action - 1] for action in actions)
+
+    def build_bfs_walk(self, start_node: Node):
+        visit_order = self.BFS(start_node)
+        if not visit_order:
+            return [], []
+
+        full_path = [visit_order[0]]
+        current = visit_order[0]
+
+        for target in visit_order[1:]:
+            segment = self.BFS_2(current, target)
+            if not segment:
+                raise ValueError(
+                    f"No path found while building BFS walk from node "
+                    f"{current.get_index()} to node {target.get_index()}"
+                )
+            full_path.extend(segment[1:])
+            current = target
+
+        return visit_order, full_path
 
     def strategy(self, node: Node):
         return self.BFS(node)
