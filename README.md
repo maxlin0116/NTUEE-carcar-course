@@ -59,6 +59,9 @@ pio run
 pio run --target upload
 ```
 
+After opening the serial monitor at `115200`, you can test the RFID reader directly:
+`i` prints MFRC522 status, `u` tries one UID read, `r` reinitializes the reader, `?` shows help.
+
 ### 3. Check the Python CLI
 
 ```powershell
@@ -88,6 +91,9 @@ Car commands: FFRL
 ```powershell
 python server\main.py manual --bt-port COM11 --expected-bt-name HM10_G6
 ```
+
+During manual driving, any `UID:XXXXXXXX` event from the car is printed in the terminal and
+forwarded to the scoreboard. Add `--fake-scoreboard` if you want to test without the live server.
 
 Commands inside manual mode:
 
@@ -119,19 +125,25 @@ What happens:
 1. Python connects to the ESP32 bridge.
 2. Python computes the BFS shortest path from node `A` to node `B`.
 3. Python prints the path and the generated car commands.
-4. The script asks for `Start command>`.
-5. Type `G` and press Enter to begin.
-6. The script sends one node command at a time as the car reports `EVENT:NODE`.
+4. Python starts a scoreboard session and forwards any `UID:XXXXXXXX` messages seen during the drive.
+5. The script asks for `Start command>`.
+6. Type `G` and press Enter to begin.
+7. The script sends one node command at a time as the car reports `EVENT:NODE`.
+
+For local testing without the live server, add `--fake-scoreboard`.
 
 ### Drive a full BFS traversal of the map
 
 This mode visits reachable nodes in BFS order and stitches together a drivable path.
+When `--drive-bt` is enabled, the script also starts a scoreboard session and forwards any
+`UID:XXXXXXXX` events reported by the car during traversal.
 
 ```powershell
 python server\main.py map --start-node 1 --start-dir south --drive-bt --bt-port COM11 --expected-bt-name HM10_G6
 ```
 
 If you only want to preview the plan without moving the car, remove `--drive-bt`.
+For local testing without the live server, add `--fake-scoreboard`.
 
 ## How Auto-Drive Works
 
@@ -245,4 +257,3 @@ Use the actual serial port of your ESP32 bridge instead.
 - `src/main.cpp`: main Arduino loop
 - `lib/control.h`: node-event and drive logic
 - `README.bluetooth.md`: BLE bridge guide
-

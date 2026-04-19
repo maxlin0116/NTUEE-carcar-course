@@ -49,6 +49,6 @@ inline void tracking(int l2, int l1, int m0, int r1, int r2) {
 
     const double powerCorrection = _Kp * error;
     vR = constrain(_Tp - powerCorrection, -255, 255);
-    vL = constrain(_Tp + 5 * powerCorrection, -255, 255);
+    vL = constrain(_Tp - 50 + powerCorrection, -255, 255);
     MotorWriting(adj_L * vL, adj_R * vR);
 }

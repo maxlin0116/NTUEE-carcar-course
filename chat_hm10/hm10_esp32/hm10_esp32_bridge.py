@@ -4,12 +4,21 @@ import re
 
 class HM10ESP32Bridge:
     def __init__(self, port, rx_timeout=0.1):
-        self.ser = serial.Serial(port=port, baudrate=115200, timeout=rx_timeout)
+        self.ser = serial.Serial()
+        self.ser.port = port
+        self.ser.baudrate = 115200
+        self.ser.timeout = rx_timeout
+        # Keep DTR/RTS low before opening so the ESP32 bridge does not
+        # reboot every time Python connects to the serial port.
+        self.ser.dtr = False
+        self.ser.rts = False
+        self.ser.open()
         # Matches 'bt_com' tag logs from ESP32
         self.log_regex = re.compile(r'bt_com:\s*(.*)')
         # Strips ANSI color codes often sent by ESP-IDF
         self.ansi_regex = re.compile(r'\x1b\[[0-9;]*m')
-        time.sleep(1) 
+        self._pending_payloads = []
+        time.sleep(0.1)
 
     def _read_bt_com_payloads(self):
         """Reads and cleans all 'bt_com' tagged logs currently in buffer."""
@@ -26,6 +35,11 @@ class HM10ESP32Bridge:
                 payloads.append(clean_payload)
         return payloads
 
+    def _queue_data_payloads(self, entries):
+        for entry in entries:
+            if entry and not entry.startswith("OK+"):
+                self._pending_payloads.append(entry)
+
     def set_hm10_name(self, name, timeout=2.0):
         """
         Sends AT+NAME<name> and verifies OK+SET<name> reply.
@@ -37,7 +51,9 @@ class HM10ESP32Bridge:
         # Poll for the specific OK+SET response
         start_time = time.time()
         while (time.time() - start_time) < timeout:
-            for entry in self._read_bt_com_payloads():
+            entries = self._read_bt_com_payloads()
+            self._queue_data_payloads(entries)
+            for entry in entries:
                 if f"OK+SET{name}" in entry:
                     return True
             time.sleep(0.01)
@@ -48,7 +64,9 @@ class HM10ESP32Bridge:
         self.ser.write(b"AT+NAME?")
         start_time = time.time()
         while (time.time() - start_time) < timeout:
-            for entry in self._read_bt_com_payloads():
+            entries = self._read_bt_com_payloads()
+            self._queue_data_payloads(entries)
+            for entry in entries:
                 if "OK+NAME" in entry:
                     return entry.replace("OK+NAME", "").strip()
             time.sleep(0.01)
@@ -59,7 +77,9 @@ class HM10ESP32Bridge:
         self.ser.write(b"AT+STATUS?")
         start_time = time.time()
         while (time.time() - start_time) < timeout:
-            for entry in self._read_bt_com_payloads():
+            entries = self._read_bt_com_payloads()
+            self._queue_data_payloads(entries)
+            for entry in entries:
                 if "OK+CONN" in entry: return "CONNECTED"
                 if "OK+UNCONN" in entry: return "DISCONNECTED"
             time.sleep(0.01)
@@ -70,7 +90,9 @@ class HM10ESP32Bridge:
         self.ser.write(b"AT+RESET")
         start_time = time.time()
         while (time.time() - start_time) < 10.0:
-            for entry in self._read_bt_com_payloads():
+            entries = self._read_bt_com_payloads()
+            self._queue_data_payloads(entries)
+            for entry in entries:
                 if "OK+RESET" in entry:
                     time.sleep(6) # Wait for ESP32 to reboot and connect to HM-10
                     return True
@@ -80,7 +102,8 @@ class HM10ESP32Bridge:
     def listen(self):
         """Returns concatenated data from BLE (ignores AT replies)."""
         logs = self._read_bt_com_payloads()
-        data_parts = [l for l in logs if not l.startswith("OK+")]
+        data_parts = self._pending_payloads + [l for l in logs if not l.startswith("OK+")]
+        self._pending_payloads = []
         return "".join(data_parts)
 
     def send(self, text):

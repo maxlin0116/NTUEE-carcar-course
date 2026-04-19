@@ -22,6 +22,44 @@ extern char queued_node_cmd;
 
 inline bool HandleMotorTestCommand(char cmd);
 
+inline char& PendingNodeCommandRef() {
+	static char pending_cmd = 0;
+	return pending_cmd;
+}
+
+inline unsigned long& LastNodeEventMsRef() {
+	static unsigned long last_node_event_ms = 0;
+	return last_node_event_ms;
+}
+
+inline bool& WaitingAtNodeRef() {
+	static bool waiting_at_node = false;
+	return waiting_at_node;
+}
+
+inline bool& NodeEventReportedRef() {
+	static bool node_event_reported = false;
+	return node_event_reported;
+}
+
+inline bool ShouldPrintTrackingDebug() {
+	static unsigned long last_debug_ms = 0;
+	const unsigned long now = millis();
+	if (now - last_debug_ms < 250) {
+		return false;
+	}
+	last_debug_ms = now;
+	return true;
+}
+
+inline void ResetSearchState() {
+	PendingNodeCommandRef() = 0;
+	LastNodeEventMsRef() = 0;
+	WaitingAtNodeRef() = false;
+	NodeEventReportedRef() = false;
+	queued_node_cmd = 0;
+}
+
 // check if the command is a node command, if so, execute it and return true. Otherwise return false.
 inline bool IsNodeCommand(char cmd) {
 	return cmd == 'L' || cmd == 'R' || cmd == 'B' || cmd == 'S' || cmd == 'F';
@@ -32,6 +70,18 @@ inline void ReportNodeEvent() {
 #ifdef DEBUG
 	Serial.println("BT event: EVENT:NODE");
 #endif
+}
+
+inline void MaybeReportNodeEvent() {
+	const unsigned long now = millis();
+	unsigned long& last_node_event_ms = LastNodeEventMsRef();
+	bool& node_event_reported = NodeEventReportedRef();
+
+	if (!node_event_reported || now - last_node_event_ms >= 250) {
+		ReportNodeEvent();
+		node_event_reported = true;
+		last_node_event_ms = now;
+	}
 }
 
 // execute the node command, return true if the command is valid, false otherwise.
@@ -82,13 +132,18 @@ inline void SetState() {
 			}
 	#endif
 		if (IsRunCommand(cmd)) {
+			if (!state) {
+				ResetSearchState();
+			}
 			state = true;
 	#ifdef DEBUG
 				Serial.print("State -> RUN via ");
 				Serial.println(cmd);
 	#endif
 			} else if (IsHaltCommand(cmd)) {
+				ResetSearchState();
 				state = false;
+				MotorWriting(0, 0);
 	#ifdef DEBUG
 				Serial.print("State -> HALT via ");
 				Serial.println(cmd);
@@ -110,9 +165,9 @@ inline void SetState() {
 
 // main search function, called when state is active. Handle both tracking and node process.
 inline void Search() {
-	static char pending_cmd = 0;				// pending node command to execute when reaching the node, 0 if no pending command
-	static bool waiting_at_node = false;
-	static bool node_event_reported = false;
+	char& pending_cmd = PendingNodeCommandRef();				// pending node command to execute when reaching the node, 0 if no pending command
+	bool& waiting_at_node = WaitingAtNodeRef();
+	bool& node_event_reported = NodeEventReportedRef();
 	const int raw_l2 = analogRead(IRpin_LL);
 	const int raw_l1 = analogRead(IRpin_L);
 	const int raw_m0 = analogRead(IRpin_M);
@@ -137,28 +192,30 @@ inline void Search() {
 
 	const bool at_node = node_is_active();
 	#ifdef DEBUG
-		Serial.print("RAW ");
-		Serial.print(raw_l2);
-		Serial.print(" ");
-		Serial.print(raw_l1);
-		Serial.print(" ");
-		Serial.print(raw_m0);
-		Serial.print(" ");
-		Serial.print(raw_r1);
-		Serial.print(" ");
-		Serial.println(raw_r2);
-		Serial.print("IR ");
-		Serial.print(l2);
-		Serial.print(" ");
-		Serial.print(l1);
-		Serial.print(" ");
-		Serial.print(m0);
-		Serial.print(" ");
-		Serial.print(r1);
-		Serial.print(" ");
-		Serial.print(r2);
-		Serial.print(" | at_node=");
-		Serial.println(at_node);
+		if (ShouldPrintTrackingDebug()) {
+			Serial.print("RAW ");
+			Serial.print(raw_l2);
+			Serial.print(" ");
+			Serial.print(raw_l1);
+			Serial.print(" ");
+			Serial.print(raw_m0);
+			Serial.print(" ");
+			Serial.print(raw_r1);
+			Serial.print(" ");
+			Serial.println(raw_r2);
+			Serial.print("IR ");
+			Serial.print(l2);
+			Serial.print(" ");
+			Serial.print(l1);
+			Serial.print(" ");
+			Serial.print(m0);
+			Serial.print(" ");
+			Serial.print(r1);
+			Serial.print(" ");
+			Serial.print(r2);
+			Serial.print(" | at_node=");
+			Serial.println(at_node);
+		}
 	#endif
 
 	// if we're waiting at the node, we will only execute the pending node command when the car is still at the node. If the car has left the node, we will clear the pending node command and stop waiting.
@@ -166,10 +223,7 @@ inline void Search() {
 		MotorWriting(0, 0);
 		// if the car has left the node, stop waiting and clear pending command. Otherwise, keep waiting and do nothing (i.e. keep the car stopped at the node).
 		if (!pending_cmd) {
-			if (!node_event_reported) {
-				ReportNodeEvent();
-				node_event_reported = true;
-			}
+			MaybeReportNodeEvent();
 			#ifdef DEBUG
 						Serial.println("Waiting at node");
 			#endif
@@ -204,14 +258,18 @@ inline void Search() {
 	MotorWriting(0, 0);	// stop at the node first
 	delay(60);			// wait for 60ms to ensure the car has stopped
 
-	
 	if (!pending_cmd) {
 		waiting_at_node = true;
-		if (!node_event_reported) {
-			ReportNodeEvent();
-			node_event_reported = true;
-		}
+		MaybeReportNodeEvent();
 		MotorWriting(0, 0);
+		return;
+	}
+
+	// Keep auto-drive aligned with manual remote control:
+	// directional node commands should always execute from the
+	// "stopped on the node, then leave-and-turn" path.
+	if (pending_cmd == 'L' || pending_cmd == 'R' || pending_cmd == 'B' || pending_cmd == 'F') {
+		waiting_at_node = true;
 		return;
 	}
 	if (!ExecuteNodeCommand(pending_cmd)) {

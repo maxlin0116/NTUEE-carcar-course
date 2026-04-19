@@ -16,9 +16,9 @@ extern int _Tp;
 
 void MotorWriting(double vL, double vR);
 
-constexpr unsigned long NODE_TURN_DELAY = 500;
+constexpr unsigned long NODE_TURN_DELAY = 350;
 constexpr unsigned long NODE_TURN_ADJUST_DELAY = 200;
-constexpr unsigned long NODE_FORWARD_DELAY = 120;
+constexpr unsigned long NODE_FORWARD_DELAY = 200;
 constexpr int NODE_IR_CRITICAL_VALUE = 150;
 
 inline bool node_center_offline() {
@@ -42,7 +42,7 @@ inline void node_forward(const unsigned long duration = NODE_FORWARD_DELAY) {
     delay(duration);
 }
 
-inline void node_left_turn(const unsigned long duration = NODE_TURN_DELAY) {
+inline void node_left_turn(const unsigned long duration = NODE_TURN_DELAY + 100) {
     MotorWriting(0, _Tp);
     delay(duration);
 
@@ -62,7 +62,7 @@ inline void node_right_turn(const unsigned long duration = NODE_TURN_DELAY) {
     }
 }
 
-inline void node_u_turn(const unsigned long duration = NODE_TURN_DELAY) {
+inline void node_u_turn(const unsigned long duration = NODE_TURN_DELAY + 50) {
     MotorWriting(_Tp, -_Tp);
     delay(duration);
 

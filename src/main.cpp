@@ -50,39 +50,39 @@ void setup() {
         }
     }
 
-	// If we couldn't detect the module, print an error message
+	// If we couldn't detect the module, continue without Bluetooth so
+	// RFID and local serial debugging still work.
     if (!moduleReady) {
-        Serial.println("Failed to detect HM-10. Check 3.3V VCC and wiring.");
-        return;
+        Serial.println("Failed to detect HM-10. Continuing without Bluetooth.");
+    } else {
+	    // Configure HM-10 settings
+        Serial.println("Restoring factory defaults...");
+        sendATCommand("AT+RENEW");
+        delay(500);
+
+	    // Set the device name
+        Serial.print("Setting name to: ");
+        Serial.println(CUSTOM_NAME);
+        String nameCmd = "AT+NAME" + String(CUSTOM_NAME);
+        sendATCommand(nameCmd.c_str());
+
+	    // Enable notifications for the HM-10
+        Serial.println("Enabling notifications...");
+        sendATCommand("AT+NOTI1");
+
+	    // Query the Bluetooth address for reference
+        Serial.println("Querying Bluetooth Address");
+        sendATCommand("AT+ADDR?");
+
+	    // Reset the module to apply settings
+        Serial.println("Restarting module...");
+        sendATCommand("AT+RESET");
+        delay(1000);
+        Serial3.begin(9600);
+
+	    // Final confirmation
+        Serial.println("Initialization Complete.");
     }
-
-	// Configure HM-10 settings
-    Serial.println("Restoring factory defaults...");
-    sendATCommand("AT+RENEW");
-    delay(500);
-
-	// Set the device name
-    Serial.print("Setting name to: ");
-    Serial.println(CUSTOM_NAME);
-    String nameCmd = "AT+NAME" + String(CUSTOM_NAME);
-    sendATCommand(nameCmd.c_str());
-
-	// Enable notifications for the HM-10
-    Serial.println("Enabling notifications...");
-    sendATCommand("AT+NOTI1");
-
-	// Query the Bluetooth address for reference
-    Serial.println("Querying Bluetooth Address");
-    sendATCommand("AT+ADDR?");
-
-	// Reset the module to apply settings
-    Serial.println("Restarting module...");
-    sendATCommand("AT+RESET");
-    delay(1000);
-    Serial3.begin(9600);
-
-	// Final confirmation
-    Serial.println("Initialization Complete.");
 
 	// Set motor control pins as outputs
     pinMode(MotorR_I1, OUTPUT);
@@ -100,6 +100,7 @@ void setup() {
     pinMode(IRpin_RR, INPUT);
 
 	// Initialize SPI and RFID reader
+    pinMode(53, OUTPUT);  // Mega hardware SS must stay output to keep SPI in master mode.
     SPI.begin();
     mfrc522.PCD_Init();
     Serial.println(F("Read UID on a MIFARE PICC:"));
@@ -112,7 +113,7 @@ void setup() {
 
 /*===========================initialize variables===========================*/
 int l2 = 0, l1 = 0, m0 = 0, r1 = 0, r2 = 0;	// IR sensor readings	
-int _Tp = 200;								// Base motor power
+int _Tp = 240;								// Base motor power
 constexpr int IR_critical_value = 150;		// Threshold for determining if the sensor is over a line (black) or not (white)
 bool state = false;							// State of the car: false = halt, true = active
 BT_CMD _cmd = NOTHING;						// Enum for Bluetooth commands, defined in bluetooth.h
