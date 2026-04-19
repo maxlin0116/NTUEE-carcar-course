@@ -22,6 +22,16 @@ class Action(IntEnum):
 
 # The Maze class represents the maze structure and provides methods for pathfinding and action generation.
 class Maze:
+    @staticmethod
+    def _parse_optional_int(value):
+        if pandas.isna(value):
+            return None
+        if isinstance(value, str):
+            value = value.strip()
+            if not value:
+                return None
+        return int(float(value))
+
     # The constructor reads the maze structure from a CSV file and initializes the nodes and their connections.
     def __init__(self, filepath: str):
         self.raw_data = pandas.read_csv(filepath).values
@@ -42,24 +52,29 @@ class Maze:
 		
 		# First, we create Node objects for each row in the CSV file and store them in a list and a dictionary for easy access.
         for row in self.raw_data:
-            node_index = int(row[0])
+            node_index = self._parse_optional_int(row[0])
+            if node_index is None:
+                raise ValueError("Maze CSV contains a row without a valid node index.")
             node = Node(node_index)
             self.nodes.append(node)
             self.node_dict[node_index] = node
 
 		# Next, we iterate through the rows again to establish the connections between the nodes based on the neighboring node indices and their corresponding directions and distances.
         for row in self.raw_data:
-            node = self.node_dict[int(row[0])]
+            node_index = self._parse_optional_int(row[0])
+            if node_index is None:
+                continue
+            node = self.node_dict[node_index]
             for neighbor_col, distance_col, direction in direction_columns:
-                neighbor_index = row[neighbor_col]
-                if pandas.isna(neighbor_index):
+                neighbor_index = self._parse_optional_int(row[neighbor_col])
+                if neighbor_index is None:
                     continue
 
-                distance = row[distance_col]
+                distance = self._parse_optional_int(row[distance_col])
                 node.set_successor(
-                    self.node_dict[int(neighbor_index)],
+                    self.node_dict[neighbor_index],
                     direction,
-                    1 if pandas.isna(distance) else int(distance),
+                    1 if distance is None else distance,
                 )
 
 	# The get_start_point method returns the starting node of the maze, which is assumed to be the node with index 1. If there are fewer than 2 nodes in the maze, it logs an error and returns 0.

@@ -3,6 +3,7 @@ import logging
 import os
 import sys
 import time
+from typing import Callable
 from pathlib import Path
 from typing import Optional
 
@@ -27,6 +28,16 @@ EXPECTED_BT_NAME = os.getenv("EXPECTED_BT_NAME", "HM10_G6")
 FAKE_UID_FILE = os.getenv("FAKE_UID_FILE", str(SERVER_DIR / "fakeUID.csv"))
 FAKE_GAME_SECONDS = float(os.getenv("FAKE_GAME_SECONDS", "70"))
 DEFAULT_START_DIR = "south"
+AUTO_NODE_SETTLE_DELAY = 0.1
+AUTO_EVENT_DRAIN_SECONDS = 0.25
+BT_EVENT_POLL_SECONDS = 0.01
+AUTO_NODE_EVENT_COOLDOWN_SECONDS = {
+    "F": 0.2,
+    "L": 0.7,
+    "R": 0.7,
+    "B": 0.9,
+    "S": 0.2,
+}
 MODE_ALIASES = {
     "0": "treasure",
     "treasure": "treasure",
@@ -91,7 +102,7 @@ def parse_args():
     parser.add_argument(
         "--listen-bt",
         action="store_true",
-        help="Listen for UID:<8 hex> messages from Bluetooth and forward them to the server",
+        help="Listen for UID:<8/14/20 hex> messages from Bluetooth and forward them to the server",
     )
     parser.add_argument(
         "--fake-scoreboard",
@@ -166,19 +177,48 @@ def format_checklist_message(result: UIDSubmissionResult) -> str:
     return "uid not found"
 
 
+def print_uid_submission_result(point, result: UIDSubmissionResult):
+    response_message = format_checklist_message(result)
+    print(f"Server response: {response_message}", flush=True)
+
+    if result.message and result.message != response_message:
+        log.info("Raw server response: %s", result.message)
+
+    try:
+        current_score = point.get_current_score()
+    except Exception as exc:
+        current_score = None
+        log.error("Failed to fetch current score after UID submission: %s", exc)
+
+    if current_score is None:
+        print("Current score: unavailable", flush=True)
+    else:
+        print(f"Current score: {current_score}", flush=True)
+
+    print(
+        f"Time remaining: {format_seconds_left(result.time_remaining)} seconds",
+        flush=True,
+    )
+
+
 def submit_uid(point, uid: str):
     try:
         result = point.submit_UID(uid.upper())
     except ValueError as exc:
-        print(str(exc))
+        print(str(exc), flush=True)
         log.error(str(exc))
         return
 
-    checklist_message = format_checklist_message(result)
-    print(checklist_message)
+    print_uid_submission_result(point, result)
 
-    if result.message and result.message != checklist_message:
-        log.info("Server response: %s", result.message)
+
+def handle_uid_event(uid: str, point=None):
+    print(f"RFID: {uid}", flush=True)
+    if point is None:
+        return
+
+    log.info("Forwarding UID %s to the scoreboard.", uid)
+    submit_uid(point, uid)
 
 
 def parse_direction(direction_name: str) -> Direction:
@@ -285,21 +325,38 @@ def prompt_drive_mode() -> str:
         print("Please enter manual or bfs.")
 
 
-def print_pending_events(interface: BTInterface):
+def print_pending_events(interface: BTInterface, point=None):
     for event_type, payload in interface.read_events():
         if event_type == "uid":
-            print(f"RFID: {payload}")
+            handle_uid_event(payload, point)
         elif event_type == "node":
-            print("Event: NODE")
+            print("Event: NODE", flush=True)
 
 
-def run_manual_control(interface: BTInterface):
+def drain_pending_events(
+    interface: BTInterface,
+    duration: float = AUTO_EVENT_DRAIN_SECONDS,
+    point=None,
+):
+    deadline = time.monotonic() + duration
+    while time.monotonic() < deadline:
+        for event_type, payload in interface.read_events():
+            if event_type == "uid":
+                handle_uid_event(payload, point)
+        time.sleep(BT_EVENT_POLL_SECONDS)
+
+
+def node_event_cooldown_for_command(command: str) -> float:
+    return AUTO_NODE_EVENT_COOLDOWN_SECONDS.get(command, 0.3)
+
+
+def run_manual_control(interface: BTInterface, point=None):
     print("Manual control mode.")
     print("Commands: G run, H halt, F forward, L left, R right, B u-turn, S stop, quit exit")
 
     valid_commands = {"G", "H", "F", "L", "R", "B", "S"}
     while True:
-        print_pending_events(interface)
+        print_pending_events(interface, point)
         command = input("Manual command> ").strip().upper()
         if not command:
             continue
@@ -313,14 +370,21 @@ def run_manual_control(interface: BTInterface):
             continue
 
         interface.send_command(command)
-        print(f"Sent manual command: {command}")
+        print(f"Sent manual command: {command}", flush=True)
         time.sleep(0.05)
-        print_pending_events(interface)
+        print_pending_events(interface, point)
 
 
 def prepare_bt_interface(bt_port: str, expected_bt_name: str) -> BTInterface:
     print(f"Checking Bluetooth on {bt_port}...")
-    interface = BTInterface(port=bt_port)
+    try:
+        interface = BTInterface(port=bt_port)
+    except Exception as exc:
+        raise RuntimeError(
+            f"Failed to open {bt_port}. Another program may already be using this port "
+            f"(Arduino Serial Monitor, PlatformIO monitor, or another Python script). "
+            f"Original error: {exc}"
+        ) from exc
 
     current_name = interface.get_hm10_name()
     if current_name != expected_bt_name:
@@ -352,6 +416,7 @@ def execute_car_command_plan(
     drive_bt: bool,
     interface: Optional[BTInterface],
     completion_message: str,
+    point=None,
 ):
     if not drive_bt:
         return
@@ -368,32 +433,46 @@ def execute_car_command_plan(
         print("Canceled before sending Bluetooth commands.")
         return
 
-    print("BFS auto-drive started.")
+    drain_pending_events(interface, point=point)
+    print("BFS auto-drive started.", flush=True)
 
     interface.send_command("G")
-    time.sleep(0.1)
-    interface.send_command(car_cmds[0])
-    print("Sent run command: G")
-    print(f"Sent node command 1/{len(car_cmds)}: {car_cmds[0]}")
+    print("Sent run command: G", flush=True)
+    print("Waiting for EVENT:NODE before sending the first node command.", flush=True)
 
-    next_index = 1
+    next_index = 0
+    next_node_event_allowed_at = 0.0
     try:
         while True:
             events = interface.read_events()
+            handled_node_event = False
             for event_type, payload in events:
                 if event_type == "uid":
-                    print(f"RFID: {payload}")
+                    handle_uid_event(payload, point)
                 elif event_type == "node":
+                    now = time.monotonic()
+                    if now < next_node_event_allowed_at:
+                        continue
+                    if handled_node_event:
+                        continue
+                    handled_node_event = True
+                    print("Event: NODE", flush=True)
                     if next_index < len(car_cmds):
+                        # Mirror manual control more closely: let the car settle
+                        # on the node before sending the next turn/forward command.
+                        time.sleep(AUTO_NODE_SETTLE_DELAY)
                         command = car_cmds[next_index]
                         interface.send_command(command)
                         next_index += 1
-                        print(f"Sent node command {next_index}/{len(car_cmds)}: {command}")
+                        next_node_event_allowed_at = (
+                            time.monotonic() + node_event_cooldown_for_command(command)
+                        )
+                        print(f"Sent node command {next_index}/{len(car_cmds)}: {command}", flush=True)
                     else:
                         interface.send_command("H")
-                        print(completion_message)
+                        print(completion_message, flush=True)
                         return
-            time.sleep(0.05)
+            time.sleep(BT_EVENT_POLL_SECONDS)
     except KeyboardInterrupt:
         print()
         interface.send_command("H")
@@ -407,6 +486,7 @@ def run_bfs_route(
     start_dir: Direction,
     drive_bt: bool,
     interface: Optional[BTInterface] = None,
+    point=None,
 ):
     path, actions, car_cmds = build_bfs_plan(maze, start_node, goal_node, start_dir)
 
@@ -418,6 +498,7 @@ def run_bfs_route(
         drive_bt=drive_bt,
         interface=interface,
         completion_message=f"Reached goal node {goal_node}. Sent halt command: H",
+        point=point,
     )
 
 
@@ -427,6 +508,7 @@ def run_bfs_map(
     start_dir: Direction,
     drive_bt: bool,
     interface: Optional[BTInterface] = None,
+    point=None,
 ):
     visit_order, path, actions, car_cmds = build_bfs_map_plan(
         maze, start_node, start_dir
@@ -441,20 +523,44 @@ def run_bfs_map(
         drive_bt=drive_bt,
         interface=interface,
         completion_message="Finished BFS map traversal. Sent halt command: H",
+        point=point,
     )
 
 
-def listen_for_uids(point, interface: BTInterface, bt_port: str):
+def listen_for_uids(
+    interface: BTInterface,
+    bt_port: str,
+    scoreboard_factory: Optional[Callable[[], object]] = None,
+):
     log.info("Listening for RFID UIDs on %s", bt_port)
-    print("Game Started.")
+    print("Game Started.", flush=True)
+    point = None
+    scoreboard_connect_failed = False
 
     try:
         while True:
-            uid = interface.read_uid()
-            if uid:
-                log.info("Received UID from Bluetooth: %s", uid)
-                submit_uid(point, uid)
-            time.sleep(0.1)
+            for event_type, payload in interface.read_events():
+                if event_type == "uid":
+                    print(f"RFID: {payload}", flush=True)
+                    if point is None and scoreboard_factory is not None and not scoreboard_connect_failed:
+                        try:
+                            point = scoreboard_factory()
+                            print("Scoreboard connected.", flush=True)
+                        except Exception as exc:
+                            scoreboard_connect_failed = True
+                            print(
+                                "Failed to connect to the scoreboard server. UID is shown locally only.",
+                                flush=True,
+                            )
+                            print(
+                                "Use --fake-scoreboard to test locally, or check your network/server URL.",
+                                flush=True,
+                            )
+                            log.error("Scoreboard connection failed: %s", exc)
+                    if point is not None:
+                        log.info("Forwarding UID %s to the scoreboard.", payload)
+                        submit_uid(point, payload)
+            time.sleep(BT_EVENT_POLL_SECONDS)
     except KeyboardInterrupt:
         print()
         log.info("Stopped Bluetooth listening.")
@@ -600,16 +706,16 @@ def main(
         log.info("Current score: %d", current_score)
 
     elif mode == "uid":
-        point = build_scoreboard(
-            team_name,
-            server_url,
-            fake_scoreboard,
-            fake_uid_file,
-            fake_game_seconds,
-        )
         log.info("Mode 2: Server UID integration.")
 
         if uid:
+            point = build_scoreboard(
+                team_name,
+                server_url,
+                fake_scoreboard,
+                fake_uid_file,
+                fake_game_seconds,
+            )
             print("Game Started.")
             submit_uid(point, uid)
             return
@@ -617,13 +723,30 @@ def main(
         if listen_bt:
             interface = prepare_bt_interface(bt_port, expected_bt_name)
             try:
-                listen_for_uids(point, interface, bt_port)
+                listen_for_uids(
+                    interface=interface,
+                    bt_port=bt_port,
+                    scoreboard_factory=lambda: build_scoreboard(
+                        team_name,
+                        server_url,
+                        fake_scoreboard,
+                        fake_uid_file,
+                        fake_game_seconds,
+                    ),
+                )
             finally:
                 interface.close()
             return
 
+        point = build_scoreboard(
+            team_name,
+            server_url,
+            fake_scoreboard,
+            fake_uid_file,
+            fake_game_seconds,
+        )
         print("Game Started.")
-        print("Enter UID (8 hex digits). Type 'quit' to exit.")
+        print("Enter UID (8, 14, or 20 hex digits). Type 'quit' to exit.")
         while True:
             try:
                 manual_uid = input("UID> ").strip()
@@ -640,20 +763,30 @@ def main(
 
     elif mode == "route":
         interface = None
+        point = None
         selected_mode = drive_mode or "bfs"
         if selected_mode == "manual":
             drive_bt = True
 
         if drive_bt:
             interface = prepare_bt_interface(bt_port, expected_bt_name)
+            point = build_scoreboard(
+                team_name,
+                server_url,
+                fake_scoreboard,
+                fake_uid_file,
+                fake_game_seconds,
+            )
             if drive_mode is None and start_node is None and goal_node is None:
                 selected_mode = prompt_drive_mode()
             if selected_mode == "manual":
+                print("UID forwarding is enabled during manual Bluetooth control.")
                 try:
-                    run_manual_control(interface)
+                    run_manual_control(interface, point)
                 finally:
                     interface.close()
                 return
+            print("UID forwarding is enabled during BFS route execution.")
 
         if start_node is None:
             start_node = prompt_for_node("Start")
@@ -674,6 +807,7 @@ def main(
                 start_dir=chosen_start_dir,
                 drive_bt=drive_bt,
                 interface=interface,
+                point=point,
             )
         finally:
             if interface is not None:
@@ -681,8 +815,17 @@ def main(
 
     elif mode == "map":
         interface = None
+        point = None
         if drive_bt:
             interface = prepare_bt_interface(bt_port, expected_bt_name)
+            point = build_scoreboard(
+                team_name,
+                server_url,
+                fake_scoreboard,
+                fake_uid_file,
+                fake_game_seconds,
+            )
+            print("UID forwarding is enabled during BFS map traversal.")
 
         if start_node is None:
             start_node = prompt_for_node("Start")
@@ -699,6 +842,7 @@ def main(
                 start_dir=chosen_start_dir,
                 drive_bt=drive_bt,
                 interface=interface,
+                point=point,
             )
         finally:
             if interface is not None:

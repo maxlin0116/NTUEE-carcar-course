@@ -1,5 +1,6 @@
 import abc
 import csv
+import json
 import logging
 import re
 import time
@@ -10,6 +11,7 @@ import requests
 import socketio
 
 log = logging.getLogger("scoreboard")
+UID_FORMAT_RE = re.compile(r"^[0-9A-Fa-f]{8}$|^[0-9A-Fa-f]{14}$|^[0-9A-Fa-f]{20}$")
 
 
 @dataclass(frozen=True)
@@ -82,9 +84,9 @@ class ScoreboardFake(Scoreboard):
         if not isinstance(UID_str, str):
             raise ValueError(f"UID format error! (expected: str) (got: {UID_str})")
 
-        if not re.match(r"^[0-9A-Fa-f]{8}$", UID_str):
+        if not UID_FORMAT_RE.match(UID_str):
             raise ValueError(
-                f"UID format error! (expected: 8 hex digits) (got: {UID_str})"
+                f"UID format error! (expected: 8, 14, or 20 hex digits) (got: {UID_str})"
             )
 
         if UID_str not in self.uid_to_score:
@@ -135,6 +137,7 @@ class ScoreboardServer(Scoreboard):
     def __init__(self, teamname: str, host=f"http://localhost:3000", debug=False):
         self.teamname = teamname
         self.ip = host
+        self._cached_score = 0
 
         log.info(f"{self.teamname} wants to play!")
         log.info(f"connecting to server......{self.ip}")
@@ -161,9 +164,9 @@ class ScoreboardServer(Scoreboard):
         if not isinstance(UID_str, str):
             raise ValueError(f"UID format error! (expected: str) (got: {UID_str})")
 
-        if not re.match(r"^[0-9A-Fa-f]{8}$", UID_str):
+        if not UID_FORMAT_RE.match(UID_str):
             raise ValueError(
-                f"UID format error! (expected: 8 hex digits) (got: {UID_str})"
+                f"UID format error! (expected: 8, 14, or 20 hex digits) (got: {UID_str})"
             )
 
         res = self.socket.call("add_UID", UID_str, namespace="/team")
@@ -179,6 +182,13 @@ class ScoreboardServer(Scoreboard):
         message = res.get("message", "No message")
         score = res.get("score", 0)
         time_remaining = res.get("time_remaining", 0)
+        current_score = res.get("current_score")
+
+        if current_score is not None:
+            self._cached_score = int(current_score)
+        elif int(score) > 0:
+            self._cached_score += int(score)
+
         log.info(message)
         return UIDSubmissionResult(
             uid=UID_str,
@@ -193,12 +203,24 @@ class ScoreboardServer(Scoreboard):
 
     def get_current_score(self) -> Optional[int]:
         try:
-            log.debug(f"{self.ip}/current_score?sid={self.sid}")
-            res = requests.get(self.ip + "/current_score", params={"sid": self.sid})
-            return res.json()["current_score"]
+            log.debug("Fetching current score from scoreboard page: %s", self.ip)
+            res = requests.get(self.ip, timeout=5)
+            res.raise_for_status()
+            match = re.search(r"var playing_teams = (.*?);", res.text, re.S)
+            if match is None:
+                return self._cached_score
+
+            playing_teams = json.loads(match.group(1))
+            for entry in playing_teams:
+                if entry.get("teamname") == self.teamname:
+                    current_score = entry.get("score")
+                    if current_score is not None:
+                        self._cached_score = int(current_score)
+                    break
+            return self._cached_score
         except Exception as e:
             log.error(f"Failed to fetch current score: {e}")
-            return None
+            return self._cached_score
 
 
 class TeamNamespace(socketio.ClientNamespace):
