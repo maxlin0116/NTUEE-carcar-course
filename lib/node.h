@@ -10,15 +10,16 @@
 /***************************************************************************/
 
 #include "hardware.h"
+#include "RFID.h"
 
 /*===========================import variable===========================*/
 extern int _Tp;
 
 void MotorWriting(double vL, double vR);
 
-constexpr unsigned long NODE_TURN_DELAY = 350;
+constexpr unsigned long NODE_TURN_DELAY = 600; // 350 orginall
 constexpr unsigned long NODE_TURN_ADJUST_DELAY = 200;
-constexpr unsigned long NODE_FORWARD_DELAY = 200;
+constexpr unsigned long NODE_FORWARD_DELAY = 400; // 200
 constexpr int NODE_IR_CRITICAL_VALUE = 150;
 
 inline bool node_center_offline() {
@@ -39,35 +40,35 @@ inline bool node_is_active() {
 
 inline void node_forward(const unsigned long duration = NODE_FORWARD_DELAY) {
     MotorWriting(_Tp, _Tp);
-    delay(duration);
+    DelayWithUIDPolling(duration);
 }
 
 inline void node_left_turn(const unsigned long duration = NODE_TURN_DELAY + 100) {
     MotorWriting(0, _Tp);
-    delay(duration);
+    DelayWithUIDPolling(duration);
 
     if (node_center_offline()) {
         MotorWriting(0, _Tp);
-        delay(NODE_TURN_ADJUST_DELAY);
+        DelayWithUIDPolling(NODE_TURN_ADJUST_DELAY);
     }
 }
 
 inline void node_right_turn(const unsigned long duration = NODE_TURN_DELAY) {
     MotorWriting(_Tp, 0);
-    delay(duration);
+    DelayWithUIDPolling(duration);
 
     if (node_center_offline()) {
         MotorWriting(_Tp, 0);
-        delay(NODE_TURN_ADJUST_DELAY);
+        DelayWithUIDPolling(NODE_TURN_ADJUST_DELAY);
     }
 }
 
 inline void node_u_turn(const unsigned long duration = NODE_TURN_DELAY + 50) {
     MotorWriting(_Tp, -_Tp);
-    delay(duration);
+    DelayWithUIDPolling(duration);
 
     if (node_center_offline()) {
         MotorWriting(_Tp, -_Tp);
-        delay(NODE_TURN_ADJUST_DELAY);
+        DelayWithUIDPolling(NODE_TURN_ADJUST_DELAY);
     }
 }

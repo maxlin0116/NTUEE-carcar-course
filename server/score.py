@@ -2,6 +2,7 @@ import abc
 import csv
 import json
 import logging
+import os
 import re
 import time
 from dataclasses import dataclass
@@ -12,6 +13,7 @@ import socketio
 
 log = logging.getLogger("scoreboard")
 UID_FORMAT_RE = re.compile(r"^[0-9A-Fa-f]{8}$|^[0-9A-Fa-f]{14}$|^[0-9A-Fa-f]{20}$")
+SCOREBOARD_CONNECT_TIMEOUT = float(os.getenv("SCOREBOARD_CONNECT_TIMEOUT", "15"))
 
 
 @dataclass(frozen=True)
@@ -145,7 +147,12 @@ class ScoreboardServer(Scoreboard):
         # create socket.io instance and connect to server
         self.socket = socketio.Client(logger=debug, engineio_logger=debug)
         self.socket.register_namespace(TeamNamespace("/team"))
-        self.socket.connect(self.ip, socketio_path="scoreboard.io")
+        self.socket.connect(
+            self.ip,
+            socketio_path="scoreboard.io",
+            namespaces=["/team"],
+            wait_timeout=SCOREBOARD_CONNECT_TIMEOUT,
+        )
         self.sid = self.socket.get_sid(namespace="/team")
 
         # start game

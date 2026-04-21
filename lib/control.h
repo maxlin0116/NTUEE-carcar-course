@@ -10,6 +10,7 @@
 /***************************************************************************/
 
 #include "hardware.h"
+#include "RFID.h"
 #include "node.h"
 #include "track.h"
 
@@ -21,6 +22,8 @@ extern bool state;
 extern char queued_node_cmd;
 
 inline bool HandleMotorTestCommand(char cmd);
+
+inline bool HandleTrackingModeCommand(char cmd);
 
 inline char& PendingNodeCommandRef() {
 	static char pending_cmd = 0;
@@ -57,6 +60,7 @@ inline void ResetSearchState() {
 	LastNodeEventMsRef() = 0;
 	WaitingAtNodeRef() = false;
 	NodeEventReportedRef() = false;
+	ResetRecoveryTrackingState();
 	queued_node_cmd = 0;
 }
 
@@ -148,6 +152,8 @@ inline void SetState() {
 				Serial.print("State -> HALT via ");
 				Serial.println(cmd);
 	#endif
+			} else if (HandleTrackingModeCommand(cmd)) {
+				// Mode command handled.
 			} else if (IsNodeCommand(cmd)) {
 				queued_node_cmd = cmd;
 	#ifdef DEBUG
@@ -232,10 +238,11 @@ inline void Search() {
 
 		while (node_is_active()) {
 			MotorWriting(_Tp, _Tp);
+			UIDRead();
 		}
 
 		MotorWriting(0, 0);
-		delay(60);
+		DelayWithUIDPolling(60);
 		waiting_at_node = false;
 		node_event_reported = false;
 
@@ -251,12 +258,16 @@ inline void Search() {
 	// if we're not at the node, do tracking. If we're at the node, execute the pending node command if there's any, otherwise just stop at the node.
 	if (!at_node) {
 		node_event_reported = false;
-		tracking(l2, l1, m0, r1, r2);
+		if (IsRecoveryTrackingMode()) {
+			tracking_with_recovery(l2, l1, m0, r1, r2);
+		} else {
+			tracking(l2, l1, m0, r1, r2);
+		}
 		return;
 	}
 
 	MotorWriting(0, 0);	// stop at the node first
-	delay(60);			// wait for 60ms to ensure the car has stopped
+	DelayWithUIDPolling(60);	// wait for 60ms to ensure the car has stopped
 
 	if (!pending_cmd) {
 		waiting_at_node = true;
@@ -284,36 +295,53 @@ inline void Search() {
 
 
 /*=============below are the test code=============*/
+inline bool HandleTrackingModeCommand(char cmd) {
+	switch (cmd) {
+		case 'P':
+			SetRecoveryTrackingMode(true);
+			Serial.println("Tracking mode: recovery PID");
+			Serial3.println("EVENT:TRACKING:RECOVERY");
+			return true;
+		case 'O':
+			SetRecoveryTrackingMode(false);
+			Serial.println("Tracking mode: original");
+			Serial3.println("EVENT:TRACKING:ORIGINAL");
+			return true;
+		default:
+			return false;
+	}
+}
+
 inline bool HandleMotorTestCommand(char cmd) {
 	switch (cmd) {
 		case '5':
 			Serial.println("TEST: MotorWriting(_Tp, _Tp)");
 			MotorWriting(_Tp, _Tp);
-			delay(500);
+			DelayWithUIDPolling(500);
 			MotorWriting(0, 0);
 			return true;
 		case '6':
 			Serial.println("TEST: MotorWriting(_Tp, 0)");
 			MotorWriting(_Tp, 0);
-			delay(500);
+			DelayWithUIDPolling(500);
 			MotorWriting(0, 0);
 			return true;
 		case '7':
 			Serial.println("TEST: MotorWriting(0, _Tp)");
 			MotorWriting(0, _Tp);
-			delay(500);
+			DelayWithUIDPolling(500);
 			MotorWriting(0, 0);
 			return true;
 		case '8':
 			Serial.println("TEST: MotorWriting(_Tp, -_Tp)");
 			MotorWriting(_Tp, -_Tp);
-			delay(500);
+			DelayWithUIDPolling(500);
 			MotorWriting(0, 0);
 			return true;
 		case '9':
 			Serial.println("TEST: MotorWriting(-_Tp, _Tp)");
 			MotorWriting(-_Tp, _Tp);
-			delay(500);
+			DelayWithUIDPolling(500);
 			MotorWriting(0, 0);
 			return true;
 		default:

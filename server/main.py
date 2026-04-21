@@ -20,9 +20,14 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 SERVER_DIR = Path(__file__).resolve().parent
+REPO_ROOT = SERVER_DIR.parent
 TEAM_NAME = os.getenv("TEAM_NAME", "WED1")
 SERVER_URL = os.getenv("SERVER_URL", "http://carcar.ntuee.org/scoreboard")
 MAZE_FILE = os.getenv("MAZE_FILE", str(SERVER_DIR / "maze.csv"))
+QUADRANT_MAZE_FILE = os.getenv(
+    "QUADRANT_MAZE_FILE",
+    str(SERVER_DIR / "big_maze_114.csv"),
+)
 BT_PORT = os.getenv("BT_PORT", "COM11")
 EXPECTED_BT_NAME = os.getenv("EXPECTED_BT_NAME", "HM10_G6")
 FAKE_UID_FILE = os.getenv("FAKE_UID_FILE", str(SERVER_DIR / "fakeUID.csv"))
@@ -38,6 +43,14 @@ AUTO_NODE_EVENT_COOLDOWN_SECONDS = {
     "B": 0.9,
     "S": 0.2,
 }
+if str(REPO_ROOT) not in sys.path:
+    sys.path.append(str(REPO_ROOT))
+
+from main_path_algorithm.main_path import (
+    DEFAULT_START_NODE as QUADRANT_DEFAULT_START_NODE,
+    compute_maze_analysis,
+)
+
 MODE_ALIASES = {
     "0": "treasure",
     "treasure": "treasure",
@@ -60,6 +73,16 @@ MODE_ALIASES = {
     "bfs-map": "map",
     "full-map": "map",
     "explore": "map",
+    "map-recovery": "map-recovery",
+    "recovery-map": "map-recovery",
+    "map-r": "map-recovery",
+    "rmap": "map-recovery",
+    "quadrant-hunt": "quadrant-hunt",
+    "quad-hunt": "quadrant-hunt",
+    "quad": "quadrant-hunt",
+    "qhunt": "quadrant-hunt",
+    "qudrant-hunt": "quadrant-hunt",
+    "qudrant": "quadrant-hunt",
     "manual": "manual",
 }
 
@@ -75,6 +98,8 @@ def parse_args():
             "  python server\\main.py bfs --start-node 1 --goal-node 10 --start-dir south\n"
             "  python server\\main.py bfs --start-node 1 --goal-node 10 --drive-bt\n"
             "  python server\\main.py map --start-node 1 --start-dir south --drive-bt\n"
+            "  python server\\main.py map-recovery --start-node 1 --start-dir south\n"
+            "  python server\\main.py quadrant-hunt --start-dir south\n"
             "  python server\\main.py uid --uid 10BA617E --fake-scoreboard"
         ),
     )
@@ -82,11 +107,17 @@ def parse_args():
         "mode",
         help=(
             "Mode name or legacy number: treasure/0, self-test/1, uid/2, "
-            "route/3, bfs, go, map, manual"
+            "route/3, bfs, go, map, map-recovery, quadrant-hunt, manual"
         ),
         type=str,
     )
     parser.add_argument("--maze-file", default=MAZE_FILE, help="Maze file", type=str)
+    parser.add_argument(
+        "--quadrant-maze-file",
+        default=QUADRANT_MAZE_FILE,
+        help="48-node maze file used by quadrant-hunt mode",
+        type=str,
+    )
     parser.add_argument("--bt-port", default=BT_PORT, help="Bluetooth port", type=str)
     parser.add_argument(
         "--expected-bt-name",
@@ -125,7 +156,7 @@ def parse_args():
         "--start-node",
         "--from-node",
         dest="start_node",
-        help="Route or map start node index",
+        help="Route, map, or quadrant-hunt start node index",
         type=int,
     )
     parser.add_argument(
@@ -272,13 +303,266 @@ def build_bfs_map_plan(
     if node_from is None:
         raise ValueError(f"Unknown start node index: {start_node}")
 
-    visit_order, path = maze.build_bfs_walk(node_from)
+    visit_order, path = maze.build_shortest_visit_walk(node_from)
     if not visit_order:
         raise ValueError(f"No reachable nodes found from node {start_node}")
 
     actions = maze.getActions(path, start_dir)
     car_cmds = maze.actions_to_car_cmds(actions)
     return visit_order, path, actions, car_cmds
+
+
+def shortest_path_length(maze: Maze, node_from: int, node_to: int) -> int:
+    node_dict = maze.get_node_dict()
+    from_node = node_dict.get(node_from)
+    to_node = node_dict.get(node_to)
+    if from_node is None or to_node is None:
+        raise ValueError(f"Unknown node index in route: {node_from} -> {node_to}")
+
+    path = maze.strategy_2(from_node, to_node)
+    if not path:
+        raise ValueError(f"No path found from node {node_from} to node {node_to}")
+    return max(len(path) - 1, 0)
+
+
+def order_targets_by_shortest_distance(
+    maze: Maze,
+    start_node: int,
+    targets,
+    score_by_node=None,
+):
+    remaining_targets = sorted(set(targets))
+    score_by_node = score_by_node or {}
+    ordered_targets = []
+    current_node = start_node
+
+    while remaining_targets:
+        best_target = None
+        best_key = None
+        for target_node in remaining_targets:
+            distance = shortest_path_length(maze, current_node, target_node)
+            sort_key = (
+                distance,
+                -score_by_node.get(target_node, 0),
+                target_node,
+            )
+            if best_key is None or sort_key < best_key:
+                best_key = sort_key
+                best_target = target_node
+
+        ordered_targets.append(best_target)
+        remaining_targets.remove(best_target)
+        current_node = best_target
+
+    return ordered_targets
+
+
+def build_multi_goal_plan(
+    maze: Maze,
+    start_node: int,
+    goal_nodes,
+    start_dir: Direction,
+):
+    node_dict = maze.get_node_dict()
+    current_node = node_dict.get(start_node)
+    if current_node is None:
+        raise ValueError(f"Unknown start node index: {start_node}")
+
+    path = [current_node]
+    for goal_node in goal_nodes:
+        target_node = node_dict.get(goal_node)
+        if target_node is None:
+            raise ValueError(f"Unknown goal node index: {goal_node}")
+
+        segment = maze.strategy_2(current_node, target_node)
+        if not segment:
+            raise ValueError(
+                f"No path found while building route from node "
+                f"{current_node.get_index()} to node {goal_node}"
+            )
+
+        path.extend(segment[1:])
+        current_node = target_node
+
+    actions = maze.getActions(path, start_dir)
+    car_cmds = maze.actions_to_car_cmds(actions)
+    return path, actions, car_cmds
+
+
+def direction_to_name(direction: Direction) -> str:
+    return direction.name.lower()
+
+
+def build_segment_execution_steps(
+    maze: Maze,
+    start_node: int,
+    goal_nodes,
+    goal_chunks,
+    start_dir: Direction,
+):
+    node_dict = maze.get_node_dict()
+    current_node = node_dict.get(start_node)
+    if current_node is None:
+        raise ValueError(f"Unknown start node index: {start_node}")
+
+    current_dir = start_dir
+    segment_steps = []
+
+    for sequence, (goal_node, chunk_name) in enumerate(zip(goal_nodes, goal_chunks), start=1):
+        target_node = node_dict.get(goal_node)
+        if target_node is None:
+            raise ValueError(f"Unknown goal node index: {goal_node}")
+
+        segment_path = maze.strategy_2(current_node, target_node)
+        if not segment_path:
+            raise ValueError(
+                f"No path found while building segment from node "
+                f"{current_node.get_index()} to node {goal_node}"
+            )
+
+        segment_start_dir = current_dir
+        segment_actions = []
+        for path_index in range(len(segment_path) - 1):
+            action, current_dir = maze.getAction(
+                current_dir,
+                segment_path[path_index],
+                segment_path[path_index + 1],
+            )
+            segment_actions.append(action)
+
+        segment_steps.append(
+            {
+                "sequence": sequence,
+                "chunk_name": chunk_name,
+                "from_node": current_node.get_index(),
+                "to_node": goal_node,
+                "path": segment_path,
+                "actions": segment_actions,
+                "actions_str": maze.actions_to_str(segment_actions),
+                "car_cmds": maze.actions_to_car_cmds(segment_actions),
+                "start_dir": direction_to_name(segment_start_dir),
+                "end_dir": direction_to_name(current_dir),
+            }
+        )
+        current_node = target_node
+
+    return segment_steps
+
+
+def select_preferred_quadrant(
+    maze: Maze,
+    analysis,
+    start_node: int,
+):
+    second_score = analysis["chunk_scores"].get("Chunk 2", 0)
+    fourth_score = analysis["chunk_scores"].get("Chunk 4", 0)
+    if second_score > fourth_score:
+        return "Chunk 2"
+    if fourth_score > second_score:
+        return "Chunk 4"
+
+    candidate_chunks = []
+    for chunk_name in ("Chunk 2", "Chunk 4"):
+        chunk_targets = [item["node"] for item in analysis["chunk_results"].get(chunk_name, [])]
+        if not chunk_targets:
+            continue
+        nearest_distance = min(
+            shortest_path_length(maze, start_node, target_node)
+            for target_node in chunk_targets
+        )
+        candidate_chunks.append((nearest_distance, chunk_name))
+
+    if candidate_chunks:
+        candidate_chunks.sort()
+        return candidate_chunks[0][1]
+    return "Chunk 2"
+
+
+def select_quadrant_search_order(analysis):
+    right_half_score = (
+        analysis["chunk_scores"].get("Chunk 2", 0)
+        + analysis["chunk_scores"].get("Chunk 3", 0)
+    )
+    left_half_score = (
+        analysis["chunk_scores"].get("Chunk 4", 0)
+        + analysis["chunk_scores"].get("Chunk 1", 0)
+    )
+
+    if right_half_score >= left_half_score:
+        quadrant_order = ["Chunk 2", "Chunk 3", "Chunk 4", "Chunk 1"]
+    else:
+        quadrant_order = ["Chunk 4", "Chunk 1", "Chunk 2", "Chunk 3"]
+
+    return {
+        "right_half": round(right_half_score, 2),
+        "left_half": round(left_half_score, 2),
+        "quadrant_order": quadrant_order,
+    }
+
+
+def build_quadrant_hunt_plan(
+    maze: Maze,
+    analysis_maze_file: str,
+    start_node: int,
+    start_dir: Direction,
+):
+    analysis = compute_maze_analysis(analysis_maze_file, start_node=start_node)
+    half_summary = select_quadrant_search_order(analysis)
+    quadrant_order = half_summary["quadrant_order"]
+
+    ordered_targets = []
+    ordered_target_chunks = []
+    phase_orders = {}
+    current_node = start_node
+
+    for chunk_name in quadrant_order:
+        chunk_results = [
+            item
+            for item in analysis["chunk_results"].get(chunk_name, [])
+            if item["score"] > 0
+        ]
+        score_by_node = {
+            item["node"]: item["score"]
+            for item in chunk_results
+        }
+        chunk_targets = [item["node"] for item in chunk_results]
+        ordered_chunk_targets = order_targets_by_shortest_distance(
+            maze=maze,
+            start_node=current_node,
+            targets=chunk_targets,
+            score_by_node=score_by_node,
+        )
+        phase_orders[chunk_name] = ordered_chunk_targets
+        ordered_targets.extend(ordered_chunk_targets)
+        ordered_target_chunks.extend([chunk_name] * len(ordered_chunk_targets))
+        if ordered_chunk_targets:
+            current_node = ordered_chunk_targets[-1]
+
+    path, actions, car_cmds = build_multi_goal_plan(
+        maze=maze,
+        start_node=start_node,
+        goal_nodes=ordered_targets,
+        start_dir=start_dir,
+    )
+    segment_steps = build_segment_execution_steps(
+        maze=maze,
+        start_node=start_node,
+        goal_nodes=ordered_targets,
+        goal_chunks=ordered_target_chunks,
+        start_dir=start_dir,
+    )
+    return {
+        "analysis": analysis,
+        "half_summary": half_summary,
+        "quadrant_order": quadrant_order,
+        "phase_orders": phase_orders,
+        "goal_nodes": ordered_targets,
+        "goal_chunks": ordered_target_chunks,
+        "segment_steps": segment_steps,
+        "path": path,
+        "actions": actions,
+        "car_cmds": car_cmds,
+    }
 
 
 def prompt_for_node(name: str) -> int:
@@ -352,9 +636,12 @@ def node_event_cooldown_for_command(command: str) -> float:
 
 def run_manual_control(interface: BTInterface, point=None):
     print("Manual control mode.")
-    print("Commands: G run, H halt, F forward, L left, R right, B u-turn, S stop, quit exit")
+    print(
+        "Commands: G run, H halt, F forward, L left, R right, B u-turn, "
+        "S stop, P recovery tracking, O original tracking, quit exit"
+    )
 
-    valid_commands = {"G", "H", "F", "L", "R", "B", "S"}
+    valid_commands = {"G", "H", "F", "L", "R", "B", "S", "P", "O"}
     while True:
         print_pending_events(interface, point)
         command = input("Manual command> ").strip().upper()
@@ -363,10 +650,13 @@ def run_manual_control(interface: BTInterface, point=None):
         if command in {"QUIT", "EXIT", "Q"}:
             return
         if command == "HELP":
-            print("Commands: G run, H halt, F forward, L left, R right, B u-turn, S stop, quit exit")
+            print(
+                "Commands: G run, H halt, F forward, L left, R right, B u-turn, "
+                "S stop, P recovery tracking, O original tracking, quit exit"
+            )
             continue
         if len(command) != 1 or command not in valid_commands:
-            print("Invalid command. Use G/H/F/L/R/B/S or quit.")
+            print("Invalid command. Use G/H/F/L/R/B/S/P/O or quit.")
             continue
 
         interface.send_command(command)
@@ -417,6 +707,7 @@ def execute_car_command_plan(
     interface: Optional[BTInterface],
     completion_message: str,
     point=None,
+    recovery_tracking: bool = False,
 ):
     if not drive_bt:
         return
@@ -435,6 +726,11 @@ def execute_car_command_plan(
 
     drain_pending_events(interface, point=point)
     print("BFS auto-drive started.", flush=True)
+
+    if recovery_tracking:
+        interface.send_command("P")
+        print("Sent tracking mode command: P (recovery PID)", flush=True)
+        time.sleep(0.05)
 
     interface.send_command("G")
     print("Sent run command: G", flush=True)
@@ -509,12 +805,13 @@ def run_bfs_map(
     drive_bt: bool,
     interface: Optional[BTInterface] = None,
     point=None,
+    recovery_tracking: bool = False,
 ):
     visit_order, path, actions, car_cmds = build_bfs_map_plan(
         maze, start_node, start_dir
     )
 
-    print(f"BFS visit order: {maze.path_to_str(visit_order)}")
+    print(f"Shortest full-map visit order: {maze.path_to_str(visit_order)}")
     print(f"Drive path: {maze.path_to_str(path)}")
     print(f"Actions: {maze.actions_to_str(actions)}")
     print(f"Car commands: {car_cmds or '(already at start)'}")
@@ -522,7 +819,72 @@ def run_bfs_map(
         car_cmds=car_cmds,
         drive_bt=drive_bt,
         interface=interface,
-        completion_message="Finished BFS map traversal. Sent halt command: H",
+        completion_message="Finished shortest full-map traversal. Sent halt command: H",
+        point=point,
+        recovery_tracking=recovery_tracking,
+    )
+
+
+def run_quadrant_hunt(
+    maze: Maze,
+    analysis_maze_file: str,
+    start_node: int,
+    start_dir: Direction,
+    drive_bt: bool,
+    interface: Optional[BTInterface] = None,
+    point=None,
+):
+    plan = build_quadrant_hunt_plan(
+        maze=maze,
+        analysis_maze_file=analysis_maze_file,
+        start_node=start_node,
+        start_dir=start_dir,
+    )
+    analysis = plan["analysis"]
+    half_summary = plan["half_summary"]
+
+    print(f"Start node: {start_node}")
+    print(
+        "Quadrant scores: "
+        f"Q1={analysis['chunk_scores'].get('Chunk 1', 0)}, "
+        f"Q2={analysis['chunk_scores'].get('Chunk 2', 0)}, "
+        f"Q3={analysis['chunk_scores'].get('Chunk 3', 0)}, "
+        f"Q4={analysis['chunk_scores'].get('Chunk 4', 0)}"
+    )
+    print(
+        "Half scores: "
+        f"Q2+Q3={half_summary['right_half']}, "
+        f"Q4+Q1={half_summary['left_half']}"
+    )
+    print(f"Quadrant search order: {' -> '.join(plan['quadrant_order'])}")
+    print("Quadrant target order:")
+    for chunk_name in plan["quadrant_order"]:
+        print(
+            f"  {chunk_name}: "
+            f"{' -> '.join(map(str, plan['phase_orders'].get(chunk_name, []))) or '(none)'}"
+        )
+    print(
+        f"Target nodes: {' -> '.join(map(str, plan['goal_nodes'])) or '(already complete)'}"
+    )
+    print("Execution steps:")
+    for step in plan["segment_steps"]:
+        print(
+            f"  {step['sequence']}. [{step['chunk_name']}] "
+            f"{step['from_node']} -> {step['to_node']} "
+            f"({step['start_dir']} -> {step['end_dir']})"
+        )
+        print(f"     Path: {maze.path_to_str(step['path'])}")
+        print(f"     Actions: {step['actions_str'] or '(none)'}")
+        print(f"     Car commands: {step['car_cmds'] or '(none)'}")
+    print(f"Drive path: {maze.path_to_str(plan['path'])}")
+    print(f"Actions: {maze.actions_to_str(plan['actions'])}")
+    print(f"Car commands: {plan['car_cmds'] or '(already at all targets)'}")
+
+    execute_car_command_plan(
+        car_cmds=plan["car_cmds"],
+        drive_bt=drive_bt,
+        interface=interface,
+        completion_message="Finished quadrant hunt. Sent halt command: H",
         point=point,
     )
 
@@ -589,6 +951,7 @@ def main(
     team_name: str,
     server_url: str,
     maze_file: str,
+    quadrant_maze_file: str,
     uid: str = None,
     listen_bt: bool = False,
     fake_scoreboard: bool = False,
@@ -602,6 +965,7 @@ def main(
     expected_bt_name: str = EXPECTED_BT_NAME,
 ):
     mode = normalize_mode(mode)
+    recovery_tracking = False
     if mode == "manual":
         mode = "route"
         drive_mode = "manual"
@@ -612,6 +976,14 @@ def main(
     elif mode == "go":
         mode = "route"
         drive_mode = "bfs"
+        drive_bt = True
+    elif mode == "map":
+        drive_bt = True
+    elif mode == "map-recovery":
+        mode = "map"
+        drive_bt = True
+        recovery_tracking = True
+    elif mode == "quadrant-hunt":
         drive_bt = True
 
     start_time = time.time()
@@ -825,19 +1197,65 @@ def main(
                 fake_uid_file,
                 fake_game_seconds,
             )
-            print("UID forwarding is enabled during BFS map traversal.")
+            if recovery_tracking:
+                print("UID forwarding is enabled during recovery shortest full-map traversal.")
+                print("Recovery tracking will be enabled automatically before G.")
+            else:
+                print("UID forwarding is enabled during shortest full-map traversal.")
 
         if start_node is None:
             start_node = prompt_for_node("Start")
         if goal_node is not None:
-            log.warning("Ignoring goal node %d in full-map BFS mode.", goal_node)
+            log.warning("Ignoring goal node %d in shortest full-map mode.", goal_node)
 
         chosen_start_dir = resolve_start_direction(start_dir)
         maze = Maze(maze_file)
-        log.info("Full-map BFS traversal from node %d.", start_node)
+        log.info("Shortest full-map traversal from node %d.", start_node)
         try:
             run_bfs_map(
                 maze=maze,
+                start_node=start_node,
+                start_dir=chosen_start_dir,
+                drive_bt=drive_bt,
+                interface=interface,
+                point=point,
+                recovery_tracking=recovery_tracking,
+            )
+        finally:
+            if interface is not None:
+                interface.close()
+
+    elif mode == "quadrant-hunt":
+        interface = None
+        point = None
+        if drive_bt:
+            interface = prepare_bt_interface(bt_port, expected_bt_name)
+            point = build_scoreboard(
+                team_name,
+                server_url,
+                fake_scoreboard,
+                fake_uid_file,
+                fake_game_seconds,
+            )
+            print("UID forwarding is enabled during quadrant hunt.")
+
+        if start_node is None:
+            start_node = QUADRANT_DEFAULT_START_NODE
+            print(f"Using default quadrant-hunt start node: {start_node}")
+        if goal_node is not None:
+            log.warning("Ignoring goal node %d in quadrant-hunt mode.", goal_node)
+
+        chosen_start_dir = resolve_start_direction(start_dir)
+        maze = Maze(quadrant_maze_file)
+        log.info(
+            "Quadrant hunt from node %d using analysis file '%s'.",
+            start_node,
+            quadrant_maze_file,
+        )
+        try:
+            run_quadrant_hunt(
+                maze=maze,
+                analysis_maze_file=quadrant_maze_file,
                 start_node=start_node,
                 start_dir=chosen_start_dir,
                 drive_bt=drive_bt,

@@ -232,6 +232,100 @@ class Maze:
 
         return visit_order, full_path
 
+    def build_shortest_visit_walk(self, start_node: Node, exact_limit=16):
+        reachable_nodes = self.BFS(start_node)
+        if not reachable_nodes:
+            return [], []
+
+        if len(reachable_nodes) > exact_limit:
+            log.warning(
+                "Shortest full-map walk has %d reachable nodes; falling back to greedy ordering.",
+                len(reachable_nodes),
+            )
+            return self._build_greedy_visit_walk(start_node, reachable_nodes)
+
+        node_to_bit = {
+            node: 1 << index
+            for index, node in enumerate(reachable_nodes)
+        }
+        full_mask = (1 << len(reachable_nodes)) - 1
+        start_state = (start_node, node_to_bit[start_node])
+        queue = deque([start_state])
+        parent = {start_state: None}
+        end_state = None
+
+        while queue:
+            current, visited_mask = queue.popleft()
+            if visited_mask == full_mask:
+                end_state = (current, visited_mask)
+                break
+
+            for successor, _, _ in current.get_successors():
+                next_state = (
+                    successor,
+                    visited_mask | node_to_bit[successor],
+                )
+                if next_state in parent:
+                    continue
+                parent[next_state] = (current, visited_mask)
+                queue.append(next_state)
+
+        if end_state is None:
+            raise ValueError(
+                f"No full-map walk found from node {start_node.get_index()}."
+            )
+
+        full_path = []
+        state = end_state
+        while state is not None:
+            full_path.append(state[0])
+            state = parent[state]
+        full_path.reverse()
+
+        seen = set()
+        visit_order = []
+        for node in full_path:
+            if node in seen:
+                continue
+            seen.add(node)
+            visit_order.append(node)
+
+        return visit_order, full_path
+
+    def _build_greedy_visit_walk(self, start_node: Node, reachable_nodes: List[Node]):
+        unvisited = set(reachable_nodes)
+        unvisited.discard(start_node)
+        visit_order = [start_node]
+        full_path = [start_node]
+        current = start_node
+
+        while unvisited:
+            best_path = None
+            best_target = None
+            for target in sorted(unvisited, key=lambda node: node.get_index()):
+                path = self.BFS_2(current, target)
+                if not path:
+                    continue
+                sort_key = (len(path), target.get_index())
+                if best_path is None or sort_key < (len(best_path), best_target.get_index()):
+                    best_path = path
+                    best_target = target
+
+            if best_path is None:
+                raise ValueError(
+                    f"No path found while building greedy full-map walk from node "
+                    f"{current.get_index()}."
+                )
+
+            full_path.extend(best_path[1:])
+            for node in best_path[1:]:
+                if node in unvisited:
+                    unvisited.remove(node)
+                    visit_order.append(node)
+            current = best_target
+
+        return visit_order, full_path
+
     def strategy(self, node: Node):
         return self.BFS(node)
 

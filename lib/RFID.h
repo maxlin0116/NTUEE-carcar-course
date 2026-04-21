@@ -48,6 +48,25 @@ inline byte* rfid(byte& idSize) {
     return 0;
 }
 
+inline void UIDRead();
+
+inline void DelayWithUIDPolling(
+    unsigned long duration_ms,
+    const unsigned long poll_slice_ms = 5
+) {
+    const unsigned long start_ms = millis();
+    while (millis() - start_ms < duration_ms) {
+        UIDRead();
+        const unsigned long elapsed_ms = millis() - start_ms;
+        const unsigned long remaining_ms =
+            duration_ms > elapsed_ms ? duration_ms - elapsed_ms : 0;
+        if (remaining_ms == 0) {
+            break;
+        }
+        delay(remaining_ms < poll_slice_ms ? remaining_ms : poll_slice_ms);
+    }
+}
+
 inline void UIDRead() {
     if (!mfrc522.PICC_IsNewCardPresent()) return;
     if (!mfrc522.PICC_ReadCardSerial()) return;
