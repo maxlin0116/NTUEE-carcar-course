@@ -70,6 +70,7 @@ static struct gattc_profile_inst gl_profile_tab[PROFILE_NUM] = {
 
 static bool connect = false;
 static bool get_service = false;
+static bool ble_ready = false;
 // static esp_gatt_srvc_id_t remote_service_id;
 // static esp_gatt_id_t remote_char_id;
 
@@ -207,7 +208,7 @@ static void uart_rx_task(void *arg)
 
             // Handle AT+STATUS? query
             if (strcmp(mes_buff, "AT+STATUS?") == 0) {
-                if (connect) {
+                if (ble_ready) {
                     ESP_LOGI(TAG_BT_COM, "OK+CONN");
                 } else {
                     ESP_LOGI(TAG_BT_COM, "OK+UNCONN");
@@ -240,7 +241,7 @@ static void uart_rx_task(void *arg)
             }
 
             // Check if BLE is connected and we have a valid characteristic handle
-            if (connect && gl_profile_tab[PROFILE_A_APP_ID].char_handle != INVALID_HANDLE) {
+            if (ble_ready && gl_profile_tab[PROFILE_A_APP_ID].char_handle != INVALID_HANDLE) {
                 // Log sent data with bt_com TAG
                 // ESP_LOGI(TAG_BT_COM, "%s", uart_data);
 
@@ -311,6 +312,9 @@ static void gattc_profile_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_
     case ESP_GATTC_OPEN_EVT:
         if (param->open.status != ESP_GATT_OK) {
             ESP_LOGE(TAG, "open failed, status %d", p_data->open.status);
+            connect = false;
+            ble_ready = false;
+            esp_ble_gap_start_scanning(30);
             break;
         }
         ESP_LOGI(TAG, "open success");
@@ -504,14 +508,18 @@ static void gattc_profile_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_
     case ESP_GATTC_WRITE_DESCR_EVT:
         if (p_data->write.status != ESP_GATT_OK) {
             ESP_LOGE(TAG, "WRITE descr failed, error status = %x", p_data->write.status);
+            ble_ready = false;
         } else {
             ESP_LOGI(TAG, "WRITE descr success - Notifications enabled");
+            ble_ready = true;
         }
         break;
 
     case ESP_GATTC_DISCONNECT_EVT:
         connect = false;
         get_service = false;
+        ble_ready = false;
+        gl_profile_tab[PROFILE_A_APP_ID].char_handle = INVALID_HANDLE;
         ESP_LOGI(TAG, "ESP_GATTC_DISCONNECT_EVT, reason = %d", p_data->disconnect.reason);
         ESP_LOGI(TAG, "Disconnected. Restarting scan to reconnect...");
 
@@ -559,6 +567,9 @@ static void esp_gap_cb(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *par
 
                     if (!connect) {
                         connect = true;
+                        ble_ready = false;
+                        get_service = false;
+                        gl_profile_tab[PROFILE_A_APP_ID].char_handle = INVALID_HANDLE;
                         ESP_LOGI(TAG, "Stopping scan and connecting...");
                         esp_ble_gap_stop_scanning();
                         memcpy(target_device_addr, scan_result->scan_rst.bda, sizeof(esp_bd_addr_t));

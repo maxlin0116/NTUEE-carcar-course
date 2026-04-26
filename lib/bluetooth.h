@@ -84,6 +84,12 @@ inline void send_byte(byte* id, byte& idSize) {
 	#endif
 }
 
+inline void clearBTInput() {
+    while (Serial3.available()) {
+        Serial3.read();
+    }
+}
+
 // Wait for a specific response from the Bluetooth module within a timeout period
 inline bool waitForResponse(const char* expected, unsigned long timeout) {
     Serial3.setTimeout(timeout);
@@ -95,8 +101,36 @@ inline bool waitForResponse(const char* expected, unsigned long timeout) {
     return response.indexOf(expected) != -1;
 }
 
+inline bool detectHM10(long baudRate) {
+    Serial3.begin(baudRate);
+    Serial3.setTimeout(150);
+
+    clearBTInput();
+    delay(50);
+    Serial3.print("AT");
+
+    if (!waitForResponse("OK", 300)) {
+        return false;
+    }
+
+    clearBTInput();
+    delay(100);
+    Serial3.print("AT+ADDR?");
+
+    if (waitForResponse("OK+ADDR", 500)) {
+        return true;
+    }
+
+    clearBTInput();
+    delay(100);
+    Serial3.print("AT+LADDR?");
+
+    return waitForResponse("OK+LADDR", 500);
+}
+
 // Send an AT command to the Bluetooth module and wait for a response
 inline void sendATCommand(const char* command) {
+    clearBTInput();
     Serial3.print(command);
     waitForResponse("", 1000);
 }

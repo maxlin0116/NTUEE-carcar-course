@@ -14,6 +14,21 @@
 /*===========================import variable===========================*/
 extern int _Tp;
 
+inline double& TrackingLastErrorRef() {
+    static double last_error = 0;
+    return last_error;
+}
+
+inline double& TrackingIntegralRef() {
+    static double integral = 0;
+    return integral;
+}
+
+inline double& TrackingLastDerivativeRef() {
+    static double last_derivative = 0;
+    return last_derivative;
+}
+
 inline bool& RecoveryTrackingModeRef() {
     static bool enabled = false;
     return enabled;
@@ -47,9 +62,16 @@ inline void ResetRecoveryTrackingState() {
     IsRecoveringRef() = false;
 }
 
+inline void ResetTrackingState() {
+    TrackingLastErrorRef() = 0;
+    TrackingIntegralRef() = 0;
+    TrackingLastDerivativeRef() = 0;
+    ResetRecoveryTrackingState();
+}
+
 inline void SetRecoveryTrackingMode(bool enabled) {
     RecoveryTrackingModeRef() = enabled;
-    ResetRecoveryTrackingState();
+    ResetTrackingState();
 }
 
 inline bool IsRecoveryTrackingMode() {
@@ -80,19 +102,72 @@ inline void MotorWriting(double vL, double vR) {
     analogWrite(MotorR_PWMR, constrain(vR, 0, 255));
 }  // MotorWriting
 
-// P/PID control Tracking
+// PID control Tracking
 inline void tracking(int l2, int l1, int m0, int r1, int r2) {
-    const double _w1 = 5.0;
-    const double _w2 = 25.0;
-    const double _Kp = 1.0;  // p term parameter
-    double error = (l2 * (-_w2) + l1 * (-_w1) + r1 * _w1 + r2 * _w2) / (l2 + l1 + m0 + _w1 + _w2);
-    double vR, vL;  // PID control output, between -255 to 255.
-    double adj_R = 1, adj_L = 1;  // Motor speed correction factors.
+    const double Kp = 0.6;
+    const double Ki = 0.0;
+    const double Kd = 0.5;
+    const int threshold = 150;
+    const int left_motor_offset = 6.0;
+    const double error_deadband = 2.0;
+    const double max_correction = 35.0;
 
-    const double powerCorrection = _Kp * error;
-    vR = constrain(_Tp - powerCorrection, -255, 255);
-    vL = constrain(_Tp - 50 + powerCorrection, -255, 255);
-    MotorWriting(adj_L * vL, adj_R * vR);
+    double& last_error = TrackingLastErrorRef();
+    double& integral = TrackingIntegralRef();
+    double& last_derivative = TrackingLastDerivativeRef();
+
+    const bool on_line = (
+        l2 > threshold ||
+        l1 > threshold ||
+        m0 > threshold ||
+        r1 > threshold ||
+        r2 > threshold
+    );
+
+    if (!on_line) {
+        integral = 0;
+        last_derivative = 0;
+        const double search_power = 40;
+        if (last_error > 0) {
+            MotorWriting(_Tp + left_motor_offset + search_power, _Tp - search_power);
+        } else if (last_error < 0) {
+            MotorWriting(_Tp + left_motor_offset - search_power, _Tp + search_power);
+        } else {
+            MotorWriting(_Tp + left_motor_offset, _Tp);
+        }
+        return;
+    }
+
+    double sum = l2 + l1 + m0 + r1 + r2;
+    if (sum == 0) {
+        sum = 1;
+    }
+
+    double error = (
+        l2 * -25.0 +
+        l1 * -8.0 +
+        r1 * 8.0 +
+        r2 * 25.0
+    ) / sum;
+
+    if (abs(error) < error_deadband) {
+        error = 0;
+    }
+
+    integral = constrain(integral + error, -80, 80);
+    const double raw_derivative = error - last_error;
+    const double derivative = (0.7 * last_derivative) + (0.3 * raw_derivative);
+    last_derivative = derivative;
+    const double correction = constrain(
+        (Kp * error) + (Ki * integral) + (Kd * derivative),
+        -max_correction,
+        max_correction
+    );
+    last_error = error;
+
+    const double vL = constrain(_Tp + left_motor_offset + 1.5 * correction, -255, 255);
+    const double vR = constrain(_Tp - 4 * correction, -255, 255);
+    MotorWriting(vL, vR);
 }
 
 // Optional tracking mode with PID and automatic backward recovery.
@@ -102,7 +177,7 @@ inline void tracking_with_recovery(int l2, int l1, int m0, int r1, int r2) {
     const double Kp = 1.8;
     const double Ki = 0.001;
     const double Kd = 2.5;
-    const int threshold = 400;
+    const int threshold = 150;
 
     double& last_error = RecoveryLastErrorRef();
     double& integral = RecoveryIntegralRef();

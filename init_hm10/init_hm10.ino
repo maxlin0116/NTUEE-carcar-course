@@ -4,13 +4,15 @@
  */
 
 // --- USER CONFIGURATION ---
-#define CUSTOM_NAME "HM10_Mega" // Max length is 12 characters [1]
+#define CUSTOM_NAME "HM10_G10" // Max length is 12 characters [1]
 // ---------------------------
 
+constexpr uint8_t HM10_RX_PIN = 15; // Mega RX3
 long baudRates[] = {9600, 19200, 38400, 57600, 115200, 4800, 2400, 1200, 230400};
 bool moduleReady = false;
 
 void setup() {
+  pinMode(HM10_RX_PIN, INPUT_PULLUP);
   Serial.begin(115200); // Debug Monitor (USB)
   while (!Serial);
   Serial.println("Initializing HM-10...");
@@ -24,11 +26,7 @@ void setup() {
     Serial3.setTimeout(100);
     delay(100);
 
-    // 2. Force Disconnection
-    // Sending "AT" while connected forces the module to disconnect [2].
-    Serial3.print("AT"); 
-    
-    if (waitForResponse("OK", 800)) {
+    if (detectHM10(baudRates[i])) {
       Serial.println("HM-10 detected and ready.");
       moduleReady = true;
       break; 
@@ -108,8 +106,42 @@ void loop() {
  * Helper to send AT commands (Uppercase, no \r or \n) [6]
  */
 void sendATCommand(const char* command) {
+  clearBTInput();
   Serial3.print(command);
   waitForResponse("", 1000); 
+}
+
+void clearBTInput() {
+  while (Serial3.available()) {
+    Serial3.read();
+  }
+}
+
+bool detectHM10(long baudRate) {
+  Serial3.begin(baudRate);
+  Serial3.setTimeout(150);
+
+  clearBTInput();
+  delay(50);
+  Serial3.print("AT");
+
+  if (!waitForResponse("OK", 300)) {
+    return false;
+  }
+
+  clearBTInput();
+  delay(100);
+  Serial3.print("AT+ADDR?");
+
+  if (waitForResponse("OK+ADDR", 500)) {
+    return true;
+  }
+
+  clearBTInput();
+  delay(100);
+  Serial3.print("AT+LADDR?");
+
+  return waitForResponse("OK+LADDR", 500);
 }
 
 /**

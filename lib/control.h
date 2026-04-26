@@ -236,6 +236,17 @@ inline void Search() {
 			return;
 		}
 
+		if (pending_cmd == 'L' || pending_cmd == 'R' || pending_cmd == 'B') {
+			if (!ExecuteNodeCommand(pending_cmd)) {
+				node_stop();
+			}
+
+			pending_cmd = 0;
+			waiting_at_node = false;
+			node_event_reported = false;
+			return;
+		}
+
 		while (node_is_active()) {
 			MotorWriting(_Tp, _Tp);
 			UIDRead();

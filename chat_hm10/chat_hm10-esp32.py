@@ -4,7 +4,7 @@ import sys
 import threading
 
 PORT = 'COM11'
-EXPECTED_NAME = 'HM10_G6'
+EXPECTED_NAME = 'HM10_G10'
 
 
 def background_listener(bridge):

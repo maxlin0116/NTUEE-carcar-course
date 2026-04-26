@@ -41,7 +41,7 @@ async def send_task(hm10):
             await hm10.send(user_msg + "\n")
 
 async def main():
-    hm10 = HM10BleakClient(target_name="HM10_Mega")
+    hm10 = HM10BleakClient(target_name="HM10_G10")
     
     if not await hm10.connect():
         return

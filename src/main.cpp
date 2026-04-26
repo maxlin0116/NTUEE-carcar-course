@@ -10,7 +10,8 @@
 MFRC522 mfrc522(SS_PIN, RST_PIN);
 
 // Bluetooth pins
-#define CUSTOM_NAME "HM10_G6"
+#define CUSTOM_NAME "HM10_G10"
+constexpr uint8_t HM10_RX_PIN = 15;  // Mega RX3. Pull up when HM-10 is unplugged to avoid floating input noise.
 long baudRates[] = {9600, 19200, 38400, 57600, 115200, 4800, 2400, 1200, 230400};
 bool moduleReady = false;
 
@@ -22,6 +23,7 @@ bool moduleReady = false;
 
 /*===========================setup================================*/
 void setup() {
+    pinMode(HM10_RX_PIN, INPUT_PULLUP);
     Serial3.begin(9600);									// Start with a common baud rate for HM-10
 	Serial3.setTimeout(100);								// Set a short timeout for AT command responses
     Serial.begin(115200);									// Start serial for debugging
@@ -38,9 +40,8 @@ void setup() {
         Serial3.begin(baudRates[i]);
         Serial3.setTimeout(100);
         delay(100);
-        Serial3.print("AT");
 
-        if (waitForResponse("OK", 800)) {
+        if (detectHM10(baudRates[i])) {
             Serial.println("HM-10 detected and ready.");
             moduleReady = true;
             break;
@@ -113,7 +114,7 @@ void setup() {
 
 /*===========================initialize variables===========================*/
 int l2 = 0, l1 = 0, m0 = 0, r1 = 0, r2 = 0;	// IR sensor readings	
-int _Tp = 240;								// Base motor power
+int _Tp = 180;								// Base motor power
 constexpr int IR_critical_value = 150;		// Threshold for determining if the sensor is over a line (black) or not (white)
 bool state = false;							// State of the car: false = halt, true = active
 BT_CMD _cmd = NOTHING;						// Enum for Bluetooth commands, defined in bluetooth.h

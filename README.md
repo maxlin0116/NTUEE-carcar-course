@@ -89,7 +89,7 @@ Car commands: FFRL
 ### Manually control the car over Bluetooth
 
 ```powershell
-python server\main.py manual --bt-port COM11 --expected-bt-name HM10_G6
+python server\main.py manual --bt-port COM11 --expected-bt-name HM10_G10
 ```
 
 During manual driving, any `UID:XXXXXXXX` event from the car is printed in the terminal and
@@ -111,13 +111,13 @@ Commands inside manual mode:
 This is the main point-to-point auto-drive command:
 
 ```powershell
-python server\main.py go --from-node A --to-node B --start-dir south --bt-port COM11 --expected-bt-name HM10_G6
+python server\main.py go --from-node A --to-node B --start-dir south --bt-port COM11 --expected-bt-name HM10_G10
 ```
 
 Example:
 
 ```powershell
-python server\main.py go --from-node 1 --to-node 10 --start-dir south --bt-port COM11 --expected-bt-name HM10_G6
+python server\main.py go --from-node 1 --to-node 10 --start-dir south --bt-port COM11 --expected-bt-name HM10_G10
 ```
 
 What happens:
@@ -139,7 +139,7 @@ When `--drive-bt` is enabled, the script also starts a scoreboard session and fo
 `UID:XXXXXXXX` events reported by the car during traversal.
 
 ```powershell
-python server\main.py map --start-node 1 --start-dir south --drive-bt --bt-port COM11 --expected-bt-name HM10_G6
+python server\main.py map --start-node 1 --start-dir south --drive-bt --bt-port COM11 --expected-bt-name HM10_G10
 ```
 
 If you only want to preview the plan without moving the car, remove `--drive-bt`.
@@ -181,7 +181,7 @@ python server\main.py uid --uid 10BA617E --fake-scoreboard
 ### Listen for UID from Bluetooth and forward to the scoreboard
 
 ```powershell
-python server\main.py uid --listen-bt --bt-port COM11 --expected-bt-name HM10_G6
+python server\main.py uid --listen-bt --bt-port COM11 --expected-bt-name HM10_G10
 ```
 
 ## Command Reference
@@ -207,7 +207,7 @@ Useful arguments:
 - `--to-node` or `--goal-node`
 - `--start-dir north|south|west|east`
 - `--bt-port COM11`
-- `--expected-bt-name HM10_G6`
+- `--expected-bt-name HM10_G10`
 - `--drive-bt`
 
 ## Troubleshooting
