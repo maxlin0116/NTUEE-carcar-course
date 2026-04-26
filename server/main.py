@@ -29,7 +29,7 @@ QUADRANT_MAZE_FILE = os.getenv(
     str(SERVER_DIR / "big_maze_114.csv"),
 )
 BT_PORT = os.getenv("BT_PORT", "COM11")
-EXPECTED_BT_NAME = os.getenv("EXPECTED_BT_NAME", "HM10_G6")
+EXPECTED_BT_NAME = os.getenv("EXPECTED_BT_NAME", "HM10_G10")
 FAKE_UID_FILE = os.getenv("FAKE_UID_FILE", str(SERVER_DIR / "fakeUID.csv"))
 FAKE_GAME_SECONDS = float(os.getenv("FAKE_GAME_SECONDS", "70"))
 DEFAULT_START_DIR = "south"
