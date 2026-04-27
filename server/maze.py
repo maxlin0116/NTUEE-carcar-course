@@ -12,6 +12,13 @@ from node import Direction, Node
 
 log = logging.getLogger(__name__)
 
+_DIRECTION_VECTORS = {
+    Direction.NORTH: (0, 1),
+    Direction.SOUTH: (0, -1),
+    Direction.WEST: (-1, 0),
+    Direction.EAST: (1, 0),
+}
+
 # The Action enum represents the possible actions the car can take based on its current direction and the direction to the next node.
 class Action(IntEnum):
     ADVANCE = 1
@@ -37,6 +44,8 @@ class Maze:
         self.raw_data = pandas.read_csv(filepath).values
         self.nodes = []
         self.node_dict = {}  # key: index, value: the corresponding node
+        self.node_positions = {}
+        self.map_center = (0.0, 0.0)
 
         if len(self.raw_data) == 0:
             return
@@ -76,6 +85,36 @@ class Maze:
                     direction,
                     1 if distance is None else distance,
                 )
+
+        self._build_node_positions()
+
+    def _build_node_positions(self):
+        if not self.nodes:
+            return
+
+        start_node = self.nodes[0]
+        self.node_positions = {start_node: (0.0, 0.0)}
+        queue = deque([start_node])
+
+        while queue:
+            current = queue.popleft()
+            current_x, current_y = self.node_positions[current]
+            for successor, direction, distance in current.get_successors():
+                if successor in self.node_positions:
+                    continue
+                vec_x, vec_y = _DIRECTION_VECTORS[direction]
+                self.node_positions[successor] = (
+                    current_x + vec_x * distance,
+                    current_y + vec_y * distance,
+                )
+                queue.append(successor)
+
+        xs = [position[0] for position in self.node_positions.values()]
+        ys = [position[1] for position in self.node_positions.values()]
+        self.map_center = (
+            (min(xs) + max(xs)) / 2.0,
+            (min(ys) + max(ys)) / 2.0,
+        )
 
 	# The get_start_point method returns the starting node of the maze, which is assumed to be the node with index 1. If there are fewer than 2 nodes in the maze, it logs an error and returns 0.
     def get_start_point(self):
@@ -211,6 +250,35 @@ class Maze:
     def actions_to_car_cmds(self, actions):
         cmd = "FBRLS"
         return "".join(cmd[action - 1] for action in actions)
+
+    def _u_turn_command_toward_map_center(self, node: Node, car_dir: Direction):
+        node_position = self.node_positions.get(node)
+        if node_position is None:
+            return "B"
+
+        heading_x, heading_y = _DIRECTION_VECTORS[Direction(car_dir)]
+        center_x = self.map_center[0] - node_position[0]
+        center_y = self.map_center[1] - node_position[1]
+        cross = heading_x * center_y - heading_y * center_x
+        if cross > 0:
+            return "C"
+        return "B"
+
+    def path_to_car_cmds(self, nodes: List[Node], start_dir=Direction.SOUTH):
+        if len(nodes) < 2:
+            return ""
+
+        car_cmds = []
+        car_dir = Direction(start_dir)
+        for i in range(len(nodes) - 1):
+            action, next_dir = self.getAction(car_dir, nodes[i], nodes[i + 1])
+            if action == Action.U_TURN:
+                car_cmds.append(self._u_turn_command_toward_map_center(nodes[i], car_dir))
+            else:
+                car_cmds.append(self.actions_to_car_cmds([action]))
+            car_dir = next_dir
+
+        return "".join(car_cmds)
 
     def build_bfs_walk(self, start_node: Node):
         visit_order = self.BFS(start_node)

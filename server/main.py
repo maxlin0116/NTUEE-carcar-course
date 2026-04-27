@@ -33,7 +33,7 @@ EXPECTED_BT_NAME = os.getenv("EXPECTED_BT_NAME", "HM10_G10")
 FAKE_UID_FILE = os.getenv("FAKE_UID_FILE", str(SERVER_DIR / "fakeUID.csv"))
 FAKE_GAME_SECONDS = float(os.getenv("FAKE_GAME_SECONDS", "70"))
 DEFAULT_START_DIR = "south"
-AUTO_NODE_SETTLE_DELAY = 0.1
+AUTO_NODE_SETTLE_DELAY = 0.06
 AUTO_EVENT_DRAIN_SECONDS = 0.25
 BT_EVENT_POLL_SECONDS = 0.01
 AUTO_NODE_EVENT_COOLDOWN_SECONDS = {
@@ -41,6 +41,7 @@ AUTO_NODE_EVENT_COOLDOWN_SECONDS = {
     "L": 0.7,
     "R": 0.7,
     "B": 0.9,
+    "C": 0.9,
     "S": 0.2,
 }
 if str(REPO_ROOT) not in sys.path:
@@ -288,7 +289,7 @@ def build_bfs_plan(
         raise ValueError(f"No path found from node {start_node} to node {goal_node}")
 
     actions = maze.getActions(path, start_dir)
-    car_cmds = maze.actions_to_car_cmds(actions)
+    car_cmds = maze.path_to_car_cmds(path, start_dir)
     return path, actions, car_cmds
 
 
@@ -308,7 +309,7 @@ def build_bfs_map_plan(
         raise ValueError(f"No reachable nodes found from node {start_node}")
 
     actions = maze.getActions(path, start_dir)
-    car_cmds = maze.actions_to_car_cmds(actions)
+    car_cmds = maze.path_to_car_cmds(path, start_dir)
     return visit_order, path, actions, car_cmds
 
 
@@ -385,7 +386,7 @@ def build_multi_goal_plan(
         current_node = target_node
 
     actions = maze.getActions(path, start_dir)
-    car_cmds = maze.actions_to_car_cmds(actions)
+    car_cmds = maze.path_to_car_cmds(path, start_dir)
     return path, actions, car_cmds
 
 
@@ -439,7 +440,7 @@ def build_segment_execution_steps(
                 "path": segment_path,
                 "actions": segment_actions,
                 "actions_str": maze.actions_to_str(segment_actions),
-                "car_cmds": maze.actions_to_car_cmds(segment_actions),
+                "car_cmds": maze.path_to_car_cmds(segment_path, segment_start_dir),
                 "start_dir": direction_to_name(segment_start_dir),
                 "end_dir": direction_to_name(current_dir),
             }
@@ -637,11 +638,11 @@ def node_event_cooldown_for_command(command: str) -> float:
 def run_manual_control(interface: BTInterface, point=None):
     print("Manual control mode.")
     print(
-        "Commands: G run, H halt, F forward, L left, R right, B u-turn, "
+        "Commands: G run, H halt, F forward, L left, R right, B/C u-turn, "
         "S stop, P recovery tracking, O original tracking, quit exit"
     )
 
-    valid_commands = {"G", "H", "F", "L", "R", "B", "S", "P", "O"}
+    valid_commands = {"G", "H", "F", "L", "R", "B", "C", "S", "P", "O"}
     while True:
         print_pending_events(interface, point)
         command = input("Manual command> ").strip().upper()
@@ -651,12 +652,12 @@ def run_manual_control(interface: BTInterface, point=None):
             return
         if command == "HELP":
             print(
-                "Commands: G run, H halt, F forward, L left, R right, B u-turn, "
+                "Commands: G run, H halt, F forward, L left, R right, B/C u-turn, "
                 "S stop, P recovery tracking, O original tracking, quit exit"
             )
             continue
         if len(command) != 1 or command not in valid_commands:
-            print("Invalid command. Use G/H/F/L/R/B/S/P/O or quit.")
+            print("Invalid command. Use G/H/F/L/R/B/C/S/P/O or quit.")
             continue
 
         interface.send_command(command)
