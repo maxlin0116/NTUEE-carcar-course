@@ -104,13 +104,13 @@ inline void MotorWriting(double vL, double vR) {
 
 // PID control Tracking
 inline void tracking(int l2, int l1, int m0, int r1, int r2) {
-    const double Kp = 0.6;
-    const double Ki = 0.0;
-    const double Kd = 0.5;
+    const double Kp = 0.55;
+    const double Ki = 0.002;
+    const double Kd = 0.60;
     const int threshold = 150;
-    const int left_motor_offset = 6.0;
+    const int left_motor_offset = 15;
     const double error_deadband = 2.0;
-    const double max_correction = 35.0;
+    const double max_correction = 27.5;
 
     double& last_error = TrackingLastErrorRef();
     double& integral = TrackingIntegralRef();
@@ -145,8 +145,8 @@ inline void tracking(int l2, int l1, int m0, int r1, int r2) {
 
     double error = (
         l2 * -25.0 +
-        l1 * -8.0 +
-        r1 * 8.0 +
+        l1 * -10.0 +
+        r1 * 10.0 +
         r2 * 25.0
     ) / sum;
 
@@ -166,7 +166,7 @@ inline void tracking(int l2, int l1, int m0, int r1, int r2) {
     last_error = error;
 
     const double vL = constrain(_Tp + left_motor_offset + 1.5 * correction, -255, 255);
-    const double vR = constrain(_Tp - 4 * correction, -255, 255);
+    const double vR = constrain(_Tp - 3.0 * correction, -255, 255);
     MotorWriting(vL, vR);
 }
 

@@ -13,6 +13,7 @@
 #include "RFID.h"
 #include "node.h"
 #include "track.h"
+#include <ctype.h>
 
 
 // shared variables
@@ -20,6 +21,8 @@ extern int l2, l1, m0, r1, r2;
 extern int _Tp;
 extern bool state;
 extern char queued_node_cmd;
+
+constexpr unsigned long NODE_SETTLE_DELAY = 40;
 
 inline bool HandleMotorTestCommand(char cmd);
 
@@ -66,7 +69,7 @@ inline void ResetSearchState() {
 
 // check if the command is a node command, if so, execute it and return true. Otherwise return false.
 inline bool IsNodeCommand(char cmd) {
-	return cmd == 'L' || cmd == 'R' || cmd == 'B' || cmd == 'S' || cmd == 'F';
+	return cmd == 'L' || cmd == 'R' || cmd == 'B' || cmd == 'C' || cmd == 'S' || cmd == 'F';
 }
 
 inline void ReportNodeEvent() {
@@ -100,6 +103,9 @@ inline bool ExecuteNodeCommand(char cmd) {
 		case 'B':
 			node_u_turn();
 			return true;
+		case 'C':
+			node_u_turn_ccw();
+			return true;
 		case 'S':
 			node_stop();
 			return true;
@@ -124,7 +130,7 @@ inline bool IsHaltCommand(char cmd) {
 // read commands from Serial3 and set state accordingly. Also handle node command queuing and motor test commands.
 inline void SetState() {
 	while (Serial3.available()) {
-		const char cmd = Serial3.read();
+		const char cmd = toupper(Serial3.read());
 	#ifdef DEBUG
 			Serial.print("BT state cmd: ");
 			if (cmd == '\r') {
@@ -236,7 +242,7 @@ inline void Search() {
 			return;
 		}
 
-		if (pending_cmd == 'L' || pending_cmd == 'R' || pending_cmd == 'B') {
+		if (pending_cmd == 'L' || pending_cmd == 'R' || pending_cmd == 'B' || pending_cmd == 'C') {
 			if (!ExecuteNodeCommand(pending_cmd)) {
 				node_stop();
 			}
@@ -252,8 +258,8 @@ inline void Search() {
 			UIDRead();
 		}
 
-		MotorWriting(0, 0);
-		DelayWithUIDPolling(60);
+	MotorWriting(0, 0);
+		DelayWithUIDPolling(NODE_SETTLE_DELAY);
 		waiting_at_node = false;
 		node_event_reported = false;
 
@@ -278,7 +284,7 @@ inline void Search() {
 	}
 
 	MotorWriting(0, 0);	// stop at the node first
-	DelayWithUIDPolling(60);	// wait for 60ms to ensure the car has stopped
+	DelayWithUIDPolling(NODE_SETTLE_DELAY);	// wait briefly to stabilize at the node
 
 	if (!pending_cmd) {
 		waiting_at_node = true;
@@ -290,7 +296,7 @@ inline void Search() {
 	// Keep auto-drive aligned with manual remote control:
 	// directional node commands should always execute from the
 	// "stopped on the node, then leave-and-turn" path.
-	if (pending_cmd == 'L' || pending_cmd == 'R' || pending_cmd == 'B' || pending_cmd == 'F') {
+	if (pending_cmd == 'L' || pending_cmd == 'R' || pending_cmd == 'B' || pending_cmd == 'C' || pending_cmd == 'F') {
 		waiting_at_node = true;
 		return;
 	}
@@ -354,6 +360,10 @@ inline bool HandleMotorTestCommand(char cmd) {
 			MotorWriting(-_Tp, _Tp);
 			DelayWithUIDPolling(500);
 			MotorWriting(0, 0);
+			return true;
+		case '4':
+			Serial.println("TEST: node_u_turn_ccw()");
+			node_u_turn_ccw();
 			return true;
 		default:
 			return false;

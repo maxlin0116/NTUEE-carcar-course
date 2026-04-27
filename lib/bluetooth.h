@@ -21,6 +21,7 @@ enum BT_CMD {
     LEFT,
     RIGHT,
     BACK,
+    BACK_CCW,
     STOP,
     FORWARD,
 };
@@ -46,6 +47,9 @@ inline BT_CMD ask_BT() {
                 break;
             case 'B':
                 message = BACK;
+                break;
+            case 'C':
+                message = BACK_CCW;
                 break;
             case 'S':
                 message = STOP;
