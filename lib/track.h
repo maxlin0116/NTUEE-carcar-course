@@ -14,6 +14,9 @@
 /*===========================import variable===========================*/
 extern int _Tp;
 
+constexpr int TRACKING_FAST_TP = 210;
+constexpr int TRACKING_SLOW_TP = 180;
+
 inline double& TrackingLastErrorRef() {
     static double last_error = 0;
     return last_error;
@@ -30,6 +33,11 @@ inline double& TrackingLastDerivativeRef() {
 }
 
 inline bool& RecoveryTrackingModeRef() {
+    static bool enabled = false;
+    return enabled;
+}
+
+inline bool& SlowTrackingModeRef() {
     static bool enabled = false;
     return enabled;
 }
@@ -71,11 +79,33 @@ inline void ResetTrackingState() {
 
 inline void SetRecoveryTrackingMode(bool enabled) {
     RecoveryTrackingModeRef() = enabled;
+    if (enabled) {
+        SlowTrackingModeRef() = false;
+        _Tp = TRACKING_FAST_TP;
+    }
     ResetTrackingState();
 }
 
 inline bool IsRecoveryTrackingMode() {
     return RecoveryTrackingModeRef();
+}
+
+inline void SetFastTrackingMode() {
+    RecoveryTrackingModeRef() = false;
+    SlowTrackingModeRef() = false;
+    _Tp = TRACKING_FAST_TP;
+    ResetTrackingState();
+}
+
+inline void SetSlowTrackingMode() {
+    RecoveryTrackingModeRef() = false;
+    SlowTrackingModeRef() = true;
+    _Tp = TRACKING_SLOW_TP;
+    ResetTrackingState();
+}
+
+inline bool IsSlowTrackingMode() {
+    return SlowTrackingModeRef();
 }
 
 // Write the voltage to motor.
@@ -104,13 +134,14 @@ inline void MotorWriting(double vL, double vR) {
 
 // PID control Tracking
 inline void tracking(int l2, int l1, int m0, int r1, int r2) {
-    const double Kp = 0.55;
-    const double Ki = 0.002;
-    const double Kd = 0.60;
+    const bool slow_mode = IsSlowTrackingMode();
+    const double Kp = slow_mode ? 1.2 : 1.8;
+    const double Ki = 0.0;
+    const double Kd = slow_mode ? 80.0 : 225.0;
     const int threshold = 150;
-    const int left_motor_offset = 15;
+    const int left_motor_offset = slow_mode ? 10 : 13.75;
     const double error_deadband = 2.0;
-    const double max_correction = 27.5;
+    const double max_correction = 35.0;
 
     double& last_error = TrackingLastErrorRef();
     double& integral = TrackingIntegralRef();
@@ -144,10 +175,10 @@ inline void tracking(int l2, int l1, int m0, int r1, int r2) {
     }
 
     double error = (
-        l2 * -25.0 +
-        l1 * -10.0 +
-        r1 * 10.0 +
-        r2 * 25.0
+        l2 * (slow_mode ? -20.0 : -35.0) +
+        l1 * (slow_mode ? -12.5 : -10.0) +
+        r1 * (slow_mode ? 7.0 : 10.0) +
+        r2 * (slow_mode ? 20.0 : 37.5)
     ) / sum;
 
     if (abs(error) < error_deadband) {
@@ -165,8 +196,8 @@ inline void tracking(int l2, int l1, int m0, int r1, int r2) {
     );
     last_error = error;
 
-    const double vL = constrain(_Tp + left_motor_offset + 1.5 * correction, -255, 255);
-    const double vR = constrain(_Tp - 3.0 * correction, -255, 255);
+    const double vL = constrain(_Tp + left_motor_offset + 0.9 * correction, -255, 255);
+    const double vR = constrain(_Tp - 0.9 * correction, -255, 255);
     MotorWriting(vL, vR);
 }
 
@@ -228,8 +259,8 @@ inline void tracking_with_recovery(int l2, int l1, int m0, int r1, int r2) {
     const double error = (
         l2 * -35.0 +
         l1 * -10.0 +
-        r1 * 10.0 +
-        r2 * 35.0
+        r1 * 20.0 +
+        r2 * 50.0
     ) / sum;
 
     integral = constrain(integral + error, -80, 80);

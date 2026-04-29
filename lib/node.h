@@ -17,10 +17,11 @@ extern int _Tp;
 
 void MotorWriting(double vL, double vR);
 inline void ResetTrackingState();
+inline bool IsSlowTrackingMode();
 
-constexpr unsigned long NODE_TURN_DELAY = 210; // 350 orginall
+constexpr unsigned long NODE_TURN_DELAY = 210;
 constexpr unsigned long NODE_TURN_ADJUST_DELAY = 200;
-constexpr unsigned long NODE_FORWARD_DELAY = 50; // 200
+constexpr unsigned long NODE_FORWARD_DELAY = 25;
 constexpr unsigned long NODE_PRE_TURN_FORWARD_DELAY = 70;
 constexpr int NODE_IR_CRITICAL_VALUE = 150;
 constexpr int NODE_STOP_IR_CRITICAL_VALUE = 150;
@@ -33,11 +34,19 @@ inline bool node_center_offline() {
 }
 
 inline bool node_line_seen() {
-    return analogRead(IRpin_LL) > NODE_IR_CRITICAL_VALUE ||
-		   analogRead(IRpin_L) > NODE_IR_CRITICAL_VALUE ||
-           analogRead(IRpin_M) > NODE_IR_CRITICAL_VALUE ||
-           analogRead(IRpin_R) > NODE_IR_CRITICAL_VALUE ||
-		   analogRead(IRpin_RR) > NODE_IR_CRITICAL_VALUE;
+    return 	analogRead(IRpin_R) > NODE_IR_CRITICAL_VALUE ||
+			analogRead(IRpin_M) > NODE_IR_CRITICAL_VALUE ||
+			analogRead(IRpin_L) > NODE_IR_CRITICAL_VALUE;
+}
+
+inline bool node_line_seen_u() {
+    return analogRead(IRpin_R) > NODE_IR_CRITICAL_VALUE;
+	
+}
+
+inline bool node_line_seen_uc() {
+    return analogRead(IRpin_L) > NODE_IR_CRITICAL_VALUE;
+	
 }
 
 inline void node_stop() {
@@ -50,7 +59,7 @@ inline bool node_is_active() {
            analogRead(IRpin_R) > NODE_STOP_IR_CRITICAL_VALUE;
 }
 
-inline void node_forward(const unsigned long duration = NODE_FORWARD_DELAY) {
+inline void node_forward(const unsigned long duration = NODE_FORWARD_DELAY - 20) {
     MotorWriting(NODE_TURN_SPEED, NODE_TURN_SPEED);
     DelayWithUIDPolling(duration);
     ResetTrackingState();
@@ -67,54 +76,77 @@ inline void DelayUntilLineOrTimeout(const unsigned long duration) {
         if (node_line_seen()) {
             break;
         }
-        delay(5);
     }
 }
 
-inline void node_left_turn(const unsigned long duration = NODE_TURN_DELAY + 450) {
-    node_forward(60);
-    MotorWriting(0, NODE_TURN_SPEED * 0.6);
+inline void DelayUntilLineOrTimeout_u(const unsigned long duration) {
+    const unsigned long start_ms = millis();
+    while (millis() - start_ms < duration) {
+        UIDRead();
+        if (node_line_seen_u()) {
+            break;
+        }
+    }
+}
+
+inline void DelayUntilLineOrTimeout_uc(const unsigned long duration) {
+    const unsigned long start_ms = millis();
+    while (millis() - start_ms < duration) {
+        UIDRead();
+        if (node_line_seen_uc()) {
+            break;
+        }
+    }
+}
+
+inline void node_left_turn(const unsigned long duration = NODE_TURN_DELAY + (IsSlowTrackingMode() ? 65 : 80)) { // 300
+    if (IsSlowTrackingMode()) {
+        node_forward(40);
+    }
+    MotorWriting(0, NODE_TURN_SPEED * 0.8);
     DelayWithUIDPolling(duration);
 
-    if (!analogRead(IRpin_M) > NODE_IR_CRITICAL_VALUE) {
-        MotorWriting(0, NODE_TURN_SPEED * 0.3);
-        DelayUntilLineOrTimeout(NODE_TURN_ADJUST_DELAY + 400);
+    if (analogRead(IRpin_M) <= NODE_IR_CRITICAL_VALUE) {
+        MotorWriting(0, NODE_TURN_SPEED * (IsSlowTrackingMode() ? 0.6 : 0.4));
+        DelayUntilLineOrTimeout(NODE_TURN_ADJUST_DELAY + 2000);
     }
     ResetTrackingState();
 }
 
-inline void node_right_turn(const unsigned long duration = NODE_TURN_DELAY + 450) {
-    node_forward(60);
-    MotorWriting(NODE_TURN_SPEED * 0.6, 0);
+inline void node_right_turn(const unsigned long duration = NODE_TURN_DELAY + (IsSlowTrackingMode() ? 65 : 80)) { // 300 0.6
+    if (IsSlowTrackingMode()) {
+        node_forward(40);
+    }
+    MotorWriting(NODE_TURN_SPEED * (IsSlowTrackingMode() ? 0.9 : 0.8), 0);
     DelayWithUIDPolling(duration);
 
-    if (!analogRead(IRpin_M) > NODE_IR_CRITICAL_VALUE) {
-		MotorWriting(NODE_TURN_SPEED * 0.3, 0);
-        DelayUntilLineOrTimeout(NODE_TURN_ADJUST_DELAY + 400);
+    if (analogRead(IRpin_M) <= NODE_IR_CRITICAL_VALUE) {
+		MotorWriting(NODE_TURN_SPEED * (IsSlowTrackingMode() ? 0.6 : 0.4), 0);
+        DelayUntilLineOrTimeout(NODE_TURN_ADJUST_DELAY + 2000);
     }
     ResetTrackingState();
 }
 
-inline void node_u_turn_ccw(const unsigned long duration = NODE_TURN_DELAY + 85) {
-	node_pre_turn_forward();
-    MotorWriting(NODE_TURN_SPEED * 0.6 + 20, -NODE_TURN_SPEED * 0.6);
-    DelayWithUIDPolling(duration + 350);
+inline void node_u_turn_ccw(const unsigned long duration = NODE_TURN_DELAY + (IsSlowTrackingMode() ? 110 : 65)) {
+	//node_pre_turn_forward();
+    MotorWriting(NODE_TURN_SPEED + (IsSlowTrackingMode() ? 80 : 100), -NODE_TURN_SPEED - (IsSlowTrackingMode() ? 0 : 50)); //0.6 + 20, 0.6
+    DelayWithUIDPolling(duration); // 250
 
-    if (!analogRead(IRpin_L) > NODE_IR_CRITICAL_VALUE) {
+    if (analogRead(IRpin_M) <= NODE_IR_CRITICAL_VALUE) {
         MotorWriting(NODE_TURN_SPEED * 0.3 + 5, -NODE_TURN_SPEED * 0.3);
-        DelayUntilLineOrTimeout(NODE_TURN_ADJUST_DELAY);
+        DelayUntilLineOrTimeout_uc(NODE_TURN_ADJUST_DELAY + 2000);
     }
     ResetTrackingState();
 }
 
-inline void node_u_turn(const unsigned long duration = NODE_TURN_DELAY + 85) {
-	node_pre_turn_forward();
-    MotorWriting(-NODE_TURN_SPEED * 0.6, NODE_TURN_SPEED * 0.6 + 20);
-    DelayWithUIDPolling(duration + 350);
+inline void node_u_turn(const unsigned long duration = NODE_TURN_DELAY + (IsSlowTrackingMode() ? 110 : 80)) {
+	//node_pre_turn_forward();
+    MotorWriting(-NODE_TURN_SPEED, NODE_TURN_SPEED + (IsSlowTrackingMode() ? 60 : 60)); // 0.6, 0.6 + 20
+    DelayWithUIDPolling(duration); // 250
 
-    if (!analogRead(IRpin_R) > NODE_IR_CRITICAL_VALUE) {
+    if (analogRead(IRpin_M) <= NODE_IR_CRITICAL_VALUE) {
         MotorWriting(-NODE_TURN_SPEED * 0.3, NODE_TURN_SPEED * 0.3 + 5);
-        DelayUntilLineOrTimeout(NODE_TURN_ADJUST_DELAY);
+        DelayUntilLineOrTimeout_u(NODE_TURN_ADJUST_DELAY + 2000);
     }
     ResetTrackingState();
 }

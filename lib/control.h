@@ -22,7 +22,8 @@ extern int _Tp;
 extern bool state;
 extern char queued_node_cmd;
 
-constexpr unsigned long NODE_SETTLE_DELAY = 40;
+constexpr unsigned long NODE_SETTLE_DELAY = 0;
+constexpr unsigned long NODE_FORWARD_SETTLE_DELAY = 0;
 
 inline bool HandleMotorTestCommand(char cmd);
 
@@ -258,8 +259,8 @@ inline void Search() {
 			UIDRead();
 		}
 
-	MotorWriting(0, 0);
-		DelayWithUIDPolling(NODE_SETTLE_DELAY);
+		MotorWriting(0, 0);
+		DelayWithUIDPolling(pending_cmd == 'F' ? NODE_FORWARD_SETTLE_DELAY : NODE_SETTLE_DELAY);
 		waiting_at_node = false;
 		node_event_reported = false;
 
@@ -284,7 +285,7 @@ inline void Search() {
 	}
 
 	MotorWriting(0, 0);	// stop at the node first
-	DelayWithUIDPolling(NODE_SETTLE_DELAY);	// wait briefly to stabilize at the node
+	DelayWithUIDPolling(NODE_SETTLE_DELAY);
 
 	if (!pending_cmd) {
 		waiting_at_node = true;
@@ -320,9 +321,14 @@ inline bool HandleTrackingModeCommand(char cmd) {
 			Serial3.println("EVENT:TRACKING:RECOVERY");
 			return true;
 		case 'O':
-			SetRecoveryTrackingMode(false);
-			Serial.println("Tracking mode: original");
-			Serial3.println("EVENT:TRACKING:ORIGINAL");
+			SetFastTrackingMode();
+			Serial.println("Tracking mode: fast");
+			Serial3.println("EVENT:TRACKING:FAST");
+			return true;
+		case 'M':
+			SetSlowTrackingMode();
+			Serial.println("Tracking mode: slow");
+			Serial3.println("EVENT:TRACKING:SLOW");
 			return true;
 		default:
 			return false;

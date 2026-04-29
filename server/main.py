@@ -33,7 +33,7 @@ EXPECTED_BT_NAME = os.getenv("EXPECTED_BT_NAME", "HM10_G10")
 FAKE_UID_FILE = os.getenv("FAKE_UID_FILE", str(SERVER_DIR / "fakeUID.csv"))
 FAKE_GAME_SECONDS = float(os.getenv("FAKE_GAME_SECONDS", "70"))
 DEFAULT_START_DIR = "south"
-AUTO_NODE_SETTLE_DELAY = 0.06
+AUTO_NODE_SETTLE_DELAY = 0.0
 AUTO_EVENT_DRAIN_SECONDS = 0.25
 BT_EVENT_POLL_SECONDS = 0.01
 AUTO_NODE_EVENT_COOLDOWN_SECONDS = {
@@ -74,6 +74,10 @@ MODE_ALIASES = {
     "bfs-map": "map",
     "full-map": "map",
     "explore": "map",
+    "map-repeat": "map-repeat",
+    "repeat-map": "map-repeat",
+    "map-loop": "map-repeat",
+    "loop-map": "map-repeat",
     "map-recovery": "map-recovery",
     "recovery-map": "map-recovery",
     "map-r": "map-recovery",
@@ -99,6 +103,7 @@ def parse_args():
             "  python server\\main.py bfs --start-node 1 --goal-node 10 --start-dir south\n"
             "  python server\\main.py bfs --start-node 1 --goal-node 10 --drive-bt\n"
             "  python server\\main.py map --start-node 1 --start-dir south --drive-bt\n"
+            "  python server\\main.py map-repeat --start-node 1 --start-dir south\n"
             "  python server\\main.py map-recovery --start-node 1 --start-dir south\n"
             "  python server\\main.py quadrant-hunt --start-dir south\n"
             "  python server\\main.py uid --uid 10BA617E --fake-scoreboard"
@@ -108,7 +113,7 @@ def parse_args():
         "mode",
         help=(
             "Mode name or legacy number: treasure/0, self-test/1, uid/2, "
-            "route/3, bfs, go, map, map-recovery, quadrant-hunt, manual"
+            "route/3, bfs, go, map, map-repeat, map-recovery, quadrant-hunt, manual"
         ),
         type=str,
     )
@@ -185,6 +190,13 @@ def parse_args():
         action="store_true",
         help="In route/map mode, send commands to the car through Bluetooth automatically",
     )
+    parser.add_argument(
+        "--tracking-speed",
+        default="slow",
+        choices=("fast", "slow"),
+        help="Tracking speed for map-repeat and quadrant-hunt auto-drive",
+        type=str,
+    )
     args = parser.parse_args()
     try:
         args.mode = normalize_mode(args.mode)
@@ -239,6 +251,10 @@ def submit_uid(point, uid: str):
     except ValueError as exc:
         print(str(exc), flush=True)
         log.error(str(exc))
+        return
+    except Exception as exc:
+        print(f"Scoreboard UID upload failed; continuing drive: {exc}", flush=True)
+        log.error("Scoreboard UID upload failed for %s: %s", uid, exc)
         return
 
     print_uid_submission_result(point, result)
@@ -311,6 +327,21 @@ def build_bfs_map_plan(
     actions = maze.getActions(path, start_dir)
     car_cmds = maze.path_to_car_cmds(path, start_dir)
     return visit_order, path, actions, car_cmds
+
+
+def path_end_direction(
+    maze: Maze,
+    path,
+    start_dir: Direction,
+) -> Direction:
+    current_dir = Direction(start_dir)
+    for path_index in range(len(path) - 1):
+        _, current_dir = maze.getAction(
+            current_dir,
+            path[path_index],
+            path[path_index + 1],
+        )
+    return current_dir
 
 
 def shortest_path_length(maze: Maze, node_from: int, node_to: int) -> int:
@@ -639,10 +670,10 @@ def run_manual_control(interface: BTInterface, point=None):
     print("Manual control mode.")
     print(
         "Commands: G run, H halt, F forward, L left, R right, B/C u-turn, "
-        "S stop, P recovery tracking, O original tracking, quit exit"
+        "S stop, P recovery tracking, O fast tracking, M slow tracking, quit exit"
     )
 
-    valid_commands = {"G", "H", "F", "L", "R", "B", "C", "S", "P", "O"}
+    valid_commands = {"G", "H", "F", "L", "R", "B", "C", "S", "P", "O", "M"}
     while True:
         print_pending_events(interface, point)
         command = input("Manual command> ").strip().upper()
@@ -653,11 +684,11 @@ def run_manual_control(interface: BTInterface, point=None):
         if command == "HELP":
             print(
                 "Commands: G run, H halt, F forward, L left, R right, B/C u-turn, "
-                "S stop, P recovery tracking, O original tracking, quit exit"
+                "S stop, P recovery tracking, O fast tracking, M slow tracking, quit exit"
             )
             continue
         if len(command) != 1 or command not in valid_commands:
-            print("Invalid command. Use G/H/F/L/R/B/C/S/P/O or quit.")
+            print("Invalid command. Use G/H/F/L/R/B/C/S/P/O/M or quit.")
             continue
 
         interface.send_command(command)
@@ -709,6 +740,7 @@ def execute_car_command_plan(
     completion_message: str,
     point=None,
     recovery_tracking: bool = False,
+    slow_tracking: bool = False,
 ):
     if not drive_bt:
         return
@@ -721,9 +753,7 @@ def execute_car_command_plan(
         raise RuntimeError("Bluetooth interface is not ready for auto-drive.")
 
     print("Assumption: the car is already placed on the start node and facing the selected start direction.")
-    if not wait_for_start_command():
-        print("Canceled before sending Bluetooth commands.")
-        return
+    print("Auto-starting the car after route calculation.", flush=True)
 
     drain_pending_events(interface, point=point)
     print("BFS auto-drive started.", flush=True)
@@ -732,13 +762,20 @@ def execute_car_command_plan(
         interface.send_command("P")
         print("Sent tracking mode command: P (recovery PID)", flush=True)
         time.sleep(0.05)
+    elif slow_tracking:
+        interface.send_command("M")
+        print("Sent tracking mode command: M (slow)", flush=True)
+        time.sleep(0.05)
+    else:
+        interface.send_command("O")
+        print("Sent tracking mode command: O (fast)", flush=True)
+        time.sleep(0.05)
 
     interface.send_command("G")
     print("Sent run command: G", flush=True)
-    print("Waiting for EVENT:NODE before sending the first node command.", flush=True)
-
     next_index = 0
     next_node_event_allowed_at = 0.0
+    print("Waiting for EVENT:NODE before sending the first node command.", flush=True)
     try:
         while True:
             events = interface.read_events()
@@ -826,6 +863,105 @@ def run_bfs_map(
     )
 
 
+def run_bfs_map_repeat(
+    maze: Maze,
+    start_node: int,
+    start_dir: Direction,
+    drive_bt: bool,
+    interface: Optional[BTInterface] = None,
+    point=None,
+    recovery_tracking: bool = False,
+    slow_tracking: bool = True,
+):
+    if not drive_bt:
+        print("map-repeat requires Bluetooth drive mode.")
+        return
+    if interface is None:
+        raise RuntimeError("Bluetooth interface is not ready for map-repeat.")
+
+    current_node = start_node
+    current_dir = Direction(start_dir)
+    loop_count = 1
+
+    visit_order, path, actions, car_cmds = build_bfs_map_plan(
+        maze, current_node, current_dir
+    )
+    if not car_cmds:
+        print("No Bluetooth commands need to be sent for this plan.")
+        return
+
+    print(f"Loop {loop_count} visit order: {maze.path_to_str(visit_order)}")
+    print(f"Loop {loop_count} drive path: {maze.path_to_str(path)}")
+    print(f"Loop {loop_count} actions: {maze.actions_to_str(actions)}")
+    print(f"Loop {loop_count} car commands: {car_cmds}")
+    print("Assumption: the car is already placed on the start node and facing the selected start direction.")
+    print("Auto-starting the car after route calculation.", flush=True)
+
+    drain_pending_events(interface, point=point)
+    print("Repeated map auto-drive started. Press Ctrl+C to halt.", flush=True)
+
+    if recovery_tracking:
+        interface.send_command("P")
+        print("Sent tracking mode command: P (recovery PID)", flush=True)
+        time.sleep(0.05)
+    elif slow_tracking:
+        interface.send_command("M")
+        print("Sent tracking mode command: M (slow)", flush=True)
+        time.sleep(0.05)
+    else:
+        interface.send_command("O")
+        print("Sent tracking mode command: O (fast)", flush=True)
+        time.sleep(0.05)
+
+    interface.send_command("G")
+    print("Sent run command: G", flush=True)
+    next_index = 0
+    next_node_event_allowed_at = 0.0
+    print("Waiting for EVENT:NODE before sending the first node command.", flush=True)
+    try:
+        while True:
+            events = interface.read_events()
+            handled_node_event = False
+            for event_type, payload in events:
+                if event_type == "uid":
+                    handle_uid_event(payload, point)
+                elif event_type == "node":
+                    now = time.monotonic()
+                    if now < next_node_event_allowed_at:
+                        continue
+                    if handled_node_event:
+                        continue
+                    handled_node_event = True
+                    print("Event: NODE", flush=True)
+
+                    if next_index >= len(car_cmds):
+                        current_node = path[-1].get_index()
+                        current_dir = path_end_direction(maze, path, current_dir)
+                        loop_count += 1
+                        visit_order, path, actions, car_cmds = build_bfs_map_plan(
+                            maze, current_node, current_dir
+                        )
+                        next_index = 0
+                        print(f"Loop {loop_count} start node: {current_node}, start dir: {direction_to_name(current_dir)}")
+                        print(f"Loop {loop_count} drive path: {maze.path_to_str(path)}")
+                        print(f"Loop {loop_count} car commands: {car_cmds or '(already at start)'}")
+                        if not car_cmds:
+                            continue
+
+                    command = car_cmds[next_index]
+                    interface.send_command(command)
+                    next_index += 1
+                    next_node_event_allowed_at = (
+                        time.monotonic() + node_event_cooldown_for_command(command)
+                    )
+                    print(f"Sent node command {next_index}/{len(car_cmds)}: {command}", flush=True)
+            time.sleep(BT_EVENT_POLL_SECONDS)
+    except KeyboardInterrupt:
+        print()
+        interface.send_command("H")
+        log.info("Repeated map auto-drive interrupted. Sent halt command.")
+
+
 def run_quadrant_hunt(
     maze: Maze,
     analysis_maze_file: str,
@@ -834,6 +970,7 @@ def run_quadrant_hunt(
     drive_bt: bool,
     interface: Optional[BTInterface] = None,
     point=None,
+    slow_tracking: bool = True,
 ):
     plan = build_quadrant_hunt_plan(
         maze=maze,
@@ -887,6 +1024,7 @@ def run_quadrant_hunt(
         interface=interface,
         completion_message="Finished quadrant hunt. Sent halt command: H",
         point=point,
+        slow_tracking=slow_tracking,
     )
 
 
@@ -964,6 +1102,7 @@ def main(
     drive_mode: Optional[str] = None,
     drive_bt: bool = False,
     expected_bt_name: str = EXPECTED_BT_NAME,
+    tracking_speed: str = "slow",
 ):
     mode = normalize_mode(mode)
     recovery_tracking = False
@@ -979,6 +1118,8 @@ def main(
         drive_mode = "bfs"
         drive_bt = True
     elif mode == "map":
+        drive_bt = True
+    elif mode == "map-repeat":
         drive_bt = True
     elif mode == "map-recovery":
         mode = "map"
@@ -1226,6 +1367,43 @@ def main(
             if interface is not None:
                 interface.close()
 
+    elif mode == "map-repeat":
+        interface = None
+        point = None
+        if drive_bt:
+            interface = prepare_bt_interface(bt_port, expected_bt_name)
+            point = build_scoreboard(
+                team_name,
+                server_url,
+                fake_scoreboard,
+                fake_uid_file,
+                fake_game_seconds,
+            )
+            print("UID forwarding is enabled during repeated shortest full-map traversal.")
+            print(f"Tracking speed: {tracking_speed}")
+
+        if start_node is None:
+            start_node = prompt_for_node("Start")
+        if goal_node is not None:
+            log.warning("Ignoring goal node %d in repeated shortest full-map mode.", goal_node)
+
+        chosen_start_dir = resolve_start_direction(start_dir)
+        maze = Maze(maze_file)
+        log.info("Repeated shortest full-map traversal from node %d.", start_node)
+        try:
+            run_bfs_map_repeat(
+                maze=maze,
+                start_node=start_node,
+                start_dir=chosen_start_dir,
+                drive_bt=drive_bt,
+                interface=interface,
+                point=point,
+                slow_tracking=(tracking_speed == "slow"),
+            )
+        finally:
+            if interface is not None:
+                interface.close()
+
     elif mode == "quadrant-hunt":
         interface = None
         point = None
@@ -1239,6 +1417,7 @@ def main(
                 fake_game_seconds,
             )
             print("UID forwarding is enabled during quadrant hunt.")
+            print(f"Tracking speed: {tracking_speed}")
 
         if start_node is None:
             start_node = QUADRANT_DEFAULT_START_NODE
@@ -1262,6 +1441,7 @@ def main(
                 drive_bt=drive_bt,
                 interface=interface,
                 point=point,
+                slow_tracking=(tracking_speed == "slow"),
             )
         finally:
             if interface is not None:
